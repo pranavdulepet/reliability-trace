@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 KEY_PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "tinker"]
-RUN_PROVIDERS = ["local"] + KEY_PROVIDERS
+RUN_PROVIDERS = ["preview", "local"] + KEY_PROVIDERS
 
 
 class ProviderKeyCreate(BaseModel):
@@ -30,7 +30,7 @@ class ProviderKeyView(BaseModel):
 
 class RunCreate(BaseModel):
     question: str = Field(min_length=3, max_length=12000)
-    provider: str = "local"
+    provider: str = "preview"
     model: Optional[str] = Field(default=None, max_length=500)
     samples: int = Field(default=3, ge=1, le=5)
     max_cost_usd: float = Field(default=1.0, ge=0.0, le=100.0)

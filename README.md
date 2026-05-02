@@ -1,6 +1,6 @@
 # ReliabilityGraph
 
-ReliabilityGraph is a local-first, BYOK answer-reliability debugger. It does not expose hidden chain-of-thought. It builds an observable Reliability Evidence Graph for a single answer: claims, evidence, assumptions, disagreement, stress tests, scoring features, trace spans, calibration status, and optional Tinker causal-probe metadata.
+ReliabilityGraph is a BYOK answer-reliability workspace for serious questions and decisions. It builds an observable Evidence Graph for a single answer: claims, evidence, assumptions, disagreement, robustness tests, scoring features, trace spans, calibration status, and optional Tinker causal-probe metadata.
 
 ## Local Run
 

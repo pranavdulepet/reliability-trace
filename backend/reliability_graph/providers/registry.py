@@ -55,8 +55,8 @@ def list_provider_metadata(saved_providers: List[str], env_key_providers: Option
     env_key_providers = env_key_providers or []
     rows: List[Dict[str, object]] = [
         {
-            "provider": "local",
-            "label": "Local Diagnostic",
+            "provider": "preview",
+            "label": "Preview Engine",
             "default_model": None,
             "key_env_var": None,
             "key_state": "not_required",

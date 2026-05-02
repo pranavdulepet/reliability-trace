@@ -2,13 +2,13 @@ import { exportUrl } from "./api";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph } from "./types";
 
 export const TABS = [
-  "Answer",
+  "Summary",
   "Claims",
   "Evidence",
   "Assumptions",
-  "Decision Analysis",
+  "Decision",
   "Disagreement",
-  "Stress Tests",
+  "Robustness",
   "Trace",
   "Calibration",
   "Causal Probe",
@@ -27,8 +27,8 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
   if (!graph) {
     return (
       <section className="report-shell empty-report">
-        <h2>Reliability Evidence Graph</h2>
-        <p>Run a trace to inspect answer support, assumptions, disagreement, stress tests, calibration, and export JSON.</p>
+        <h2>Evidence Graph</h2>
+        <p>Run an audit to inspect answer support, assumptions, disagreement, robustness, calibration, and export JSON.</p>
       </section>
     );
   }
@@ -37,15 +37,15 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
     <section className="report-shell">
       <div className="report-header">
         <div>
-          <h2>Reliability Evidence Graph</h2>
+          <h2>Evidence Graph</h2>
           <p>
-            {graph.run.question_type} · {graph.run.provider}
+            {graph.run.question_type} · {formatProvider(graph.run.provider)}
           </p>
         </div>
         <div className="score-block">
           <span>Reliability Score</span>
           <strong>{graph.answer.reliability_score} / 100</strong>
-          <small>{graph.answer.calibration_status.replaceAll("_", " ")}</small>
+          <small>{formatStatus(graph.answer.calibration_status)}</small>
         </div>
       </div>
       <nav className="tab-row" aria-label="Report tabs">
@@ -61,13 +61,13 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
 }
 
 function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
-  if (tab === "Answer") return <AnswerTab graph={graph} />;
+  if (tab === "Summary") return <AnswerTab graph={graph} />;
   if (tab === "Claims") return <ClaimsTab graph={graph} />;
   if (tab === "Evidence") return <EvidenceTab graph={graph} />;
   if (tab === "Assumptions") return <AssumptionsTab graph={graph} />;
-  if (tab === "Decision Analysis") return <DecisionTab graph={graph} />;
+  if (tab === "Decision") return <DecisionTab graph={graph} />;
   if (tab === "Disagreement") return <DisagreementTab graph={graph} />;
-  if (tab === "Stress Tests") return <StressTab graph={graph} />;
+  if (tab === "Robustness") return <StressTab graph={graph} />;
   if (tab === "Trace") return <TraceTab graph={graph} />;
   if (tab === "Calibration") return <CalibrationTab graph={graph} />;
   if (tab === "Causal Probe") return <CausalProbeTab graph={graph} />;
@@ -78,7 +78,7 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="answer-grid">
       <div className="answer-main">
-        <h3>Final Answer</h3>
+        <h3>Audited Answer</h3>
         <p>{graph.answer.final_answer}</p>
         {graph.answer.recommendation && (
           <>
@@ -92,11 +92,11 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
         <p>{graph.answer.what_would_change_the_answer}</p>
       </div>
       <div className="signal-panel">
-        <h3>Positive Signals</h3>
+        <h3>Trust Signals</h3>
         <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-        <h3>Negative Signals</h3>
+        <h3>Risk Signals</h3>
         <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-        <h3>Action</h3>
+        <h3>Recommended Action</h3>
         <p>{graph.answer.recommended_user_action}</p>
       </div>
     </div>
@@ -107,7 +107,7 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
   const assessments = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
   return (
     <Table
-      columns={["Claim", "Type", "Importance", "Checkability", "Support", "Evidence"]}
+      columns={["Claim", "Type", "Importance", "Checkability", "Assessment", "Evidence"]}
       rows={graph.claims.map((claim) => {
         const assessment = assessments.get(claim.claim_id);
         return [
@@ -251,7 +251,7 @@ function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
 function CausalProbeTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div>
-      <h3>{graph.causal_probe.mode.replaceAll("_", " ")}</h3>
+      <h3>{formatStatus(graph.causal_probe.mode)}</h3>
       <p>{graph.causal_probe.reason}</p>
       <Table columns={["Operation"]} rows={graph.causal_probe.operations.map((operation) => [operation])} />
     </div>
@@ -262,7 +262,7 @@ function ExportTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="export-panel">
       <p>Format: {graph.export.format}</p>
-      <p>Contains plaintext provider keys: {graph.export.contains_plaintext_provider_keys ? "yes" : "no"}</p>
+      <p>Plaintext provider keys included: {graph.export.contains_plaintext_provider_keys ? "yes" : "no"}</p>
       <a className="primary-link" href={exportUrl(graph.run.run_id)}>
         Export JSON
       </a>
@@ -296,4 +296,14 @@ function formatPercent(value: number): string {
 
 function formatNumber(value: number): string {
   return Number.isFinite(value) ? value.toFixed(2) : "0.00";
+}
+
+function formatProvider(provider: string): string {
+  if (provider === "local" || provider === "preview") return "Preview Engine";
+  if (provider === "openrouter") return "OpenRouter";
+  return provider.slice(0, 1).toUpperCase() + provider.slice(1);
+}
+
+function formatStatus(value: string): string {
+  return value.replaceAll("_", " ");
 }

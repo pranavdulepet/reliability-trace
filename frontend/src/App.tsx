@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createRun,
@@ -21,9 +21,11 @@ import { Report, type ReportTab, TABS } from "./report";
 import type { ProviderKeyView, ProviderMetadata, ReliabilityGraph, RunCreate, RunView, StreamEvent } from "./types";
 import "./styles.css";
 
+type WorkspaceView = "workbench" | "runs" | "sources" | "benchmarks" | "settings";
+
 const initialRunForm: RunCreate = {
   question: "Should I build an LLM answer-reliability product?",
-  provider: "local",
+  provider: "preview",
   model: null,
   samples: 3,
   max_cost_usd: 1,
@@ -41,12 +43,13 @@ function App() {
   const [graph, setGraph] = useState<ReliabilityGraph | null>(null);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [activeTab, setActiveTab] = useState<ReportTab>(TABS[0]);
+  const [view, setView] = useState<WorkspaceView>("workbench");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void refresh().catch((err) => {
-      setError(err instanceof Error ? err.message : "Failed to load local backend state");
+      setError(err instanceof Error ? err.message : "Failed to load workspace state");
     });
   }, []);
 
@@ -96,9 +99,10 @@ function App() {
         ...form,
         model: form.model?.trim() ? form.model.trim() : null,
         question: form.question.trim(),
-        use_live_provider: form.provider === "local" ? false : form.use_live_provider,
+        use_live_provider: isPreviewProvider(form.provider) ? false : form.use_live_provider,
       });
       setActiveRunId(run.run_id);
+      setView("workbench");
       await streamRun(run.run_id);
       await refresh();
     } catch (err) {
@@ -121,7 +125,7 @@ function App() {
         setEvents((current) => [...current, parsed]);
         if (parsed.graph) {
           setGraph(parsed.graph);
-          setActiveTab("Answer");
+          setActiveTab("Summary");
         }
         setRunning(false);
         source.close();
@@ -143,31 +147,71 @@ function App() {
       setActiveRunId(runId);
       setGraph(run.graph);
       setEvents([]);
-      setActiveTab("Answer");
+      setView("workbench");
+      setActiveTab("Summary");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load run");
     }
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <h1>ReliabilityGraph</h1>
-          <p>Local-first answer reliability debugger</p>
+    <div className="workspace-shell">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-mark">RG</div>
+          <div>
+            <h1>ReliabilityGraph</h1>
+            <p>Answer reliability workspace</p>
+          </div>
         </div>
-        <div className="topbar-note">BYOK · Observable evidence · No hidden-CoT claims</div>
-      </header>
+        <nav className="main-nav" aria-label="Workspace">
+          <NavButton active={view === "workbench"} label="Workbench" onClick={() => setView("workbench")} />
+          <NavButton active={view === "runs"} label="Runs" onClick={() => setView("runs")} />
+          <NavButton active={view === "sources"} label="Sources" onClick={() => setView("sources")} />
+          <NavButton active={view === "benchmarks"} label="Benchmarks" onClick={() => setView("benchmarks")} />
+          <NavButton active={view === "settings"} label="Settings" onClick={() => setView("settings")} />
+        </nav>
+        <ProviderRail providers={providers} compact />
+      </aside>
 
-      <ProviderRail providers={providers} />
+      <div className="content-shell">
+        <header className="workspace-header">
+          <div>
+            <span className="eyebrow">Answer Audit</span>
+            <h2>{headerTitle(view)}</h2>
+            <p>{headerSubtitle(view)}</p>
+          </div>
+          <div className="header-actions">
+            <button className="ghost-button" type="button" onClick={() => setView("settings")}>
+              Provider Vault
+            </button>
+            <button className="primary-compact" type="button" onClick={() => setView("workbench")}>
+              New Audit
+            </button>
+          </div>
+        </header>
 
-      {error && <div className="error-banner">{error}</div>}
+        {error && <div className="error-banner">{error}</div>}
 
-      <main>
-        <div className="upper-grid">
-          <div className="left-stack">
-            <RunComposer providers={providers} form={form} setForm={setForm} running={running} onSubmit={handleStartRun} />
-            <KeyManager
+        <main>
+          {view === "workbench" && (
+            <>
+              <div className="upper-grid">
+                <RunComposer providers={providers} form={form} setForm={setForm} running={running} onSubmit={handleStartRun} />
+                <TracePanel events={events} progress={progress} running={running} graph={graph} />
+              </div>
+              <Report graph={graph} activeTab={activeTab} setActiveTab={setActiveTab} />
+            </>
+          )}
+
+          {view === "runs" && <RunsPage runs={runs} activeRunId={activeRunId} onSelect={handleSelectRun} />}
+
+          {view === "sources" && <SourcesPage graph={graph} />}
+
+          {view === "benchmarks" && <BenchmarksPage graph={graph} />}
+
+          {view === "settings" && (
+            <SettingsPage
               providers={providers}
               keys={keys}
               keyProvider={keyProvider}
@@ -177,17 +221,127 @@ function App() {
               onSave={handleSaveKey}
               onDelete={handleDeleteKey}
             />
-          </div>
-          <div className="right-stack">
-            <TracePanel events={events} progress={progress} running={running} />
-            <RunHistory runs={runs} activeRunId={activeRunId} onSelect={handleSelectRun} />
-          </div>
-        </div>
-
-        <Report graph={graph} activeTab={activeTab} setActiveTab={setActiveTab} />
-      </main>
+          )}
+        </main>
+      </div>
     </div>
   );
+}
+
+function NavButton({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button className={active ? "nav-button active" : "nav-button"} type="button" onClick={onClick}>
+      <span className="nav-glyph">{label.slice(0, 1)}</span>
+      {label}
+    </button>
+  );
+}
+
+function RunsPage({
+  runs,
+  activeRunId,
+  onSelect,
+}: {
+  runs: RunView[];
+  activeRunId: string | null;
+  onSelect: (runId: string) => void;
+}) {
+  return (
+    <section className="page-panel">
+      <RunHistory runs={runs} activeRunId={activeRunId} onSelect={onSelect} expanded />
+    </section>
+  );
+}
+
+function SourcesPage({ graph }: { graph: ReliabilityGraph | null }) {
+  const evidence = graph?.evidence ?? [];
+  return (
+    <section className="page-panel">
+      <div className="page-copy">
+        <h3>Source Coverage</h3>
+        <p>Evidence appears here after an audit attaches sources to claims.</p>
+      </div>
+      {evidence.length === 0 ? (
+        <div className="empty-state">No source-backed evidence has been collected yet.</div>
+      ) : (
+        <div className="source-list">
+          {evidence.map((item) => (
+            <article className="source-row" key={item.evidence_id}>
+              <strong>{item.source_title}</strong>
+              <span>{item.source_type} · {item.source_quality}</span>
+              <p>{item.snippet}</p>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BenchmarksPage({ graph }: { graph: ReliabilityGraph | null }) {
+  return (
+    <section className="page-panel benchmark-grid">
+      <div className="metric-tile">
+        <span>Calibration</span>
+        <strong>{graph ? graph.answer.calibration_status.replaceAll("_", " ") : "Awaiting labeled runs"}</strong>
+      </div>
+      <div className="metric-tile">
+        <span>Trace completeness</span>
+        <strong>{graph ? `${Math.round((graph.features.trace_completeness ?? 0) * 100)}%` : "No audit selected"}</strong>
+      </div>
+      <div className="page-copy wide">
+        <h3>Benchmark Report</h3>
+        <p>
+          Calibration curves, risk coverage, ablations, and user labels will populate this research view as audited answers
+          accumulate. Until then, scores remain diagnostic.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function SettingsPage(props: {
+  providers: ProviderMetadata[];
+  keys: ProviderKeyView[];
+  keyProvider: string;
+  keyValue: string;
+  setKeyProvider: Dispatch<SetStateAction<string>>;
+  setKeyValue: Dispatch<SetStateAction<string>>;
+  onSave: (event: FormEvent) => void;
+  onDelete: (provider: string) => void;
+}) {
+  return (
+    <div className="settings-grid">
+      <KeyManager {...props} />
+      <section className="panel">
+        <div className="section-heading">
+          <h2>Provider Readiness</h2>
+          <p>Choose the provider mix for higher-quality audits.</p>
+        </div>
+        <ProviderRail providers={props.providers} />
+      </section>
+    </div>
+  );
+}
+
+function headerTitle(view: WorkspaceView): string {
+  if (view === "runs") return "Audit history";
+  if (view === "sources") return "Source coverage";
+  if (view === "benchmarks") return "Calibration research";
+  if (view === "settings") return "Provider vault";
+  return "Evaluate an important answer";
+}
+
+function headerSubtitle(view: WorkspaceView): string {
+  if (view === "runs") return "Review previous audits and reopen their evidence graphs.";
+  if (view === "sources") return "Inspect source coverage and claim-linked evidence.";
+  if (view === "benchmarks") return "Track diagnostic score quality as labeled runs accumulate.";
+  if (view === "settings") return "Connect Tinker, OpenAI, Claude, Gemini, and OpenRouter keys.";
+  return "Generate candidate answers, inspect claims, and see what changes trust.";
+}
+
+function isPreviewProvider(provider: string): boolean {
+  return provider === "preview" || provider === "local";
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);

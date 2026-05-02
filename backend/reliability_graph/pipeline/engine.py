@@ -119,7 +119,7 @@ class ReliabilityPipeline:
             state["calibration"] = {
                 "status": "uncalibrated_diagnostic",
                 "display": "Uncalibrated diagnostic score",
-                "note": "No benchmark calibration data has been attached to this local run.",
+                "note": "No benchmark calibration data has been attached to this audit yet.",
             }
             return {"calibration_status": state["calibration"]["status"]}
 
@@ -134,7 +134,7 @@ class ReliabilityPipeline:
         run: Dict[str, Any],
         resolve_key: ProviderKeyResolver,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        if run["provider"] != "local" and run["use_live_provider"]:
+        if run["provider"] not in ["preview", "local"] and run["use_live_provider"]:
             api_key = await resolve_key(run["provider"])
             if api_key:
                 try:
@@ -149,7 +149,7 @@ class ReliabilityPipeline:
                                         role="system",
                                         content=(
                                             "You are generating one candidate answer for a reliability audit. "
-                                            "Be direct, preserve uncertainty, and do not expose hidden chain-of-thought."
+                                            "Be direct, preserve uncertainty, and avoid private reasoning transcripts."
                                         ),
                                     ),
                                     ModelMessage(role="user", content=prompt),
@@ -211,9 +211,9 @@ class ReliabilityPipeline:
         return [
             {
                 "candidate_id": "cand_%d" % (index + 1),
-                "provider": "local",
-                "model": "local-diagnostic",
-                "prompt_variant": "local_%d" % (index + 1),
+                "provider": "preview",
+                "model": "preview-engine",
+                "prompt_variant": "preview_%d" % (index + 1),
                 "answer_text": "Question: %s\n\n%s" % (q, templates[index % len(templates)]),
                 "semantic_cluster_id": None,
             }
@@ -381,11 +381,11 @@ class ReliabilityPipeline:
             {
                 "evidence_id": "e1",
                 "claim_id": "c1",
-                "source_title": "Local run trace",
+                "source_title": "Audit trace",
                 "source_url": None,
                 "source_date": None,
                 "source_type": "system_trace",
-                "snippet": "This local run generated claim-level assessments but did not perform external web retrieval.",
+                "snippet": "This audit generated claim-level assessments but did not perform external web retrieval.",
                 "support_relation": "partially_supports",
                 "source_quality": "medium",
             },
@@ -423,7 +423,7 @@ class ReliabilityPipeline:
                     "claim_id": claim["claim_id"],
                     "status": status,
                     "support_score": support,
-                    "explanation": "Assessment is based on local trace evidence; external retrieval has not been attached.",
+                    "explanation": "Assessment is based on pipeline trace evidence; external retrieval has not been attached.",
                     "evidence_ids": evidence_ids,
                 }
             )
@@ -468,8 +468,8 @@ class ReliabilityPipeline:
     def _rubric(self, state: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "judge_score_is_diagnostic_only": True,
-            "judge_model": "local-rubric",
-            "rubric_version": "rg-rubric-v0",
+            "judge_model": "ReliabilityGraph rubric",
+            "rubric_version": "rg-rubric",
             "judge_calibration": "unvalidated",
             "dimensions": {
                 "factual_support": 0.54,
@@ -565,7 +565,7 @@ class ReliabilityPipeline:
                     "Stress tests did not cause unsupported reversal",
                 ],
                 "top_negative_signals": [
-                    "External evidence retrieval is not attached in this local run",
+                    "External evidence retrieval is not attached in this audit",
                     "High-impact assumptions remain untested",
                 ],
             },
@@ -589,7 +589,7 @@ class ReliabilityPipeline:
             "features": state["features"],
             "score_caps": state["score_caps"],
             "export": {
-                "format": "ReliabilityEvidenceGraph.v0",
+                "format": "ReliabilityEvidenceGraph",
                 "json_ready": True,
                 "contains_plaintext_provider_keys": False,
             },
