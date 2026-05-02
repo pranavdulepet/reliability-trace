@@ -107,28 +107,32 @@ function App() {
     }
   }
 
-  async function streamRun(runId: string) {
-    const source = runEventSource(runId);
+  async function streamRun(runId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const source = runEventSource(runId);
 
-    source.addEventListener("progress", (event) => {
-      const parsed = JSON.parse(event.data) as StreamEvent;
-      setEvents((current) => [...current, parsed]);
-    });
+      source.addEventListener("progress", (event) => {
+        const parsed = JSON.parse(event.data) as StreamEvent;
+        setEvents((current) => [...current, parsed]);
+      });
 
-    source.addEventListener("completed", (event) => {
-      const parsed = JSON.parse(event.data) as StreamEvent;
-      setEvents((current) => [...current, parsed]);
-      if (parsed.graph) {
-        setGraph(parsed.graph);
-        setActiveTab("Answer");
-      }
-      setRunning(false);
-      source.close();
-    });
+      source.addEventListener("completed", (event) => {
+        const parsed = JSON.parse(event.data) as StreamEvent;
+        setEvents((current) => [...current, parsed]);
+        if (parsed.graph) {
+          setGraph(parsed.graph);
+          setActiveTab("Answer");
+        }
+        setRunning(false);
+        source.close();
+        resolve();
+      });
 
-    source.addEventListener("error", () => {
-      setRunning(false);
-      source.close();
+      source.addEventListener("error", () => {
+        setRunning(false);
+        source.close();
+        reject(new Error("Run stream failed"));
+      });
     });
   }
 
