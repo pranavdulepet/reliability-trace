@@ -1,7 +1,7 @@
-import asyncio
 import os
 from typing import Any, Dict
 
+from .async_utils import run_blocking
 from .base import GenerateRequest, GenerateResponse, ModelProvider, ProviderError
 from .http import post_json
 
@@ -25,7 +25,7 @@ class AnthropicProvider(ModelProvider):
         }
         if system:
             payload["system"] = system
-        result = await asyncio.to_thread(
+        result = await run_blocking(
             post_json,
             "https://api.anthropic.com/v1/messages",
             {

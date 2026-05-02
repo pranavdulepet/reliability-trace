@@ -1,8 +1,8 @@
-import asyncio
 import os
 from typing import Any, Dict, List
 
 from .base import GenerateRequest, GenerateResponse, ModelMessage, ModelProvider, ProviderError
+from .async_utils import run_blocking
 from .http import post_json
 
 
@@ -14,17 +14,22 @@ class OpenAICompatibleProvider(ModelProvider):
         base_url: str,
         default_model: str,
         extra_headers: Dict[str, str] = None,
+        use_completions: bool = False,
     ) -> None:
         self.name = name
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.use_completions = use_completions
 
     async def generate(self, request: GenerateRequest) -> GenerateResponse:
         model = request.model or self.default_model
         if not model:
             raise ProviderError("%s requires a model" % self.name)
+        if self.use_completions:
+            return await self._generate_completion(request, model)
+
         payload: Dict[str, Any] = {
             "model": model,
             "messages": self._messages(request.messages),
@@ -39,7 +44,7 @@ class OpenAICompatibleProvider(ModelProvider):
             "Content-Type": "application/json",
         }
         headers.update(self.extra_headers)
-        result = await asyncio.to_thread(
+        result = await run_blocking(
             post_json,
             self.base_url + "/chat/completions",
             headers,
@@ -60,6 +65,43 @@ class OpenAICompatibleProvider(ModelProvider):
 
     def _messages(self, messages: List[ModelMessage]) -> List[Dict[str, str]]:
         return [{"role": message.role, "content": message.content} for message in messages]
+
+    async def _generate_completion(self, request: GenerateRequest, model: str) -> GenerateResponse:
+        payload: Dict[str, Any] = {
+            "model": model,
+            "prompt": self._prompt(request.messages),
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+        }
+        headers = {
+            "Authorization": "Bearer " + self.api_key,
+            "Content-Type": "application/json",
+        }
+        headers.update(self.extra_headers)
+        result = await run_blocking(
+            post_json,
+            self.base_url + "/completions",
+            headers,
+            payload,
+        )
+        choices = result.get("choices") or []
+        if not choices:
+            raise ProviderError("%s returned no choices" % self.name)
+        return GenerateResponse(
+            text=str(choices[0].get("text") or ""),
+            model=str(result.get("model") or model),
+            provider=self.name,
+            raw=result,
+            usage=result.get("usage"),
+        )
+
+    def _prompt(self, messages: List[ModelMessage]) -> str:
+        lines = []
+        for message in messages:
+            role = "Assistant" if message.role == "assistant" else "User" if message.role == "user" else "System"
+            lines.append("%s: %s" % (role, message.content))
+        lines.append("Assistant:")
+        return "\n\n".join(lines)
 
 
 def openai_provider(api_key: str) -> OpenAICompatibleProvider:
@@ -92,5 +134,6 @@ def tinker_provider(api_key: str) -> OpenAICompatibleProvider:
             "TINKER_BASE_URL",
             "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
         ),
-        default_model=os.getenv("TINKER_MODEL", ""),
+        default_model=os.getenv("TINKER_MODEL", "meta-llama/Llama-3.2-1B"),
+        use_completions=os.getenv("TINKER_ENDPOINT", "completions") == "completions",
     )

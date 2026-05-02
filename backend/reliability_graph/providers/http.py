@@ -7,10 +7,15 @@ from .base import ProviderError
 
 
 def post_json(url: str, headers: Dict[str, str], payload: Dict[str, Any], timeout: int = 90) -> Dict[str, Any]:
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "ReliabilityGraph/0.1",
+    }
+    request_headers.update(headers)
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
+        headers=request_headers,
         method="POST",
     )
     try:

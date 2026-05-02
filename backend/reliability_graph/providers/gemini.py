@@ -1,7 +1,7 @@
-import asyncio
 import os
 from typing import Any, Dict, List
 
+from .async_utils import run_blocking
 from .base import GenerateRequest, GenerateResponse, ModelProvider, ProviderError
 from .http import post_json
 
@@ -26,7 +26,7 @@ class GeminiProvider(ModelProvider):
                 "maxOutputTokens": request.max_tokens,
             },
         }
-        result = await asyncio.to_thread(
+        result = await run_blocking(
             post_json,
             "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent" % model,
             {
