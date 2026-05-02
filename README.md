@@ -16,6 +16,19 @@ Open `http://localhost:5173`.
 
 Provider keys are sent only to the backend. Saved keys are encrypted before they are written to the local SQLite database, and plaintext keys are never returned to the browser.
 
+Docker is optional:
+
+```bash
+docker compose up --build
+```
+
+## Checks
+
+```bash
+python3 -m pytest
+cd frontend && npm run build
+```
+
 ## Current Shape
 
 - `backend/reliability_graph`: FastAPI API, SQLite storage, encrypted key vault, provider adapters, reliability graph pipeline.
