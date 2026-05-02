@@ -1,0 +1,15 @@
+[project]
+name = "reliability-graph"
+version = "0.1.0"
+description = "Local-first BYOK answer-reliability debugger"
+requires-python = ">=3.8"
+dependencies = [
+  "cryptography>=42",
+  "fastapi>=0.121",
+  "uvicorn>=0.30",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
