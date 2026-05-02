@@ -45,7 +45,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void refresh();
+    void refresh().catch((err) => {
+      setError(err instanceof Error ? err.message : "Failed to load local backend state");
+    });
   }, []);
 
   const progress = useMemo(() => {
