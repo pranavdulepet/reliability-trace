@@ -142,6 +142,25 @@ class ReliabilityPipeline:
         run: Dict[str, Any],
         resolve_key: ProviderKeyResolver,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        fixed_answer = self._eval_answer_override(run)
+        if fixed_answer:
+            candidate_texts = [fixed_answer]
+            for sample in run.get("candidate_answer_overrides", []):
+                cleaned = self._clean_model_text(str(sample))
+                if cleaned and cleaned not in candidate_texts:
+                    candidate_texts.append(cleaned)
+            return [
+                {
+                    "candidate_id": "cand_%d" % (index + 1),
+                    "provider": "eval",
+                    "model": "fixed-answer",
+                    "prompt_variant": "benchmark_%d" % (index + 1),
+                    "answer_text": text[:5000],
+                    "semantic_cluster_id": None,
+                }
+                for index, text in enumerate(candidate_texts[: max(1, int(run["samples"]))])
+            ], None
+
         if run["provider"] not in ["preview", "local"] and run["use_live_provider"]:
             api_key = await resolve_key(run["provider"])
             if api_key:
@@ -377,7 +396,7 @@ class ReliabilityPipeline:
     def _synthesize(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
         is_decision = question_type in ["decision_qa", "mixed", "opinion_qa"]
-        primary = self._primary_candidate_text(state["candidate_answers"])
+        primary = self._eval_answer_override(state["run"]) or self._primary_candidate_text(state["candidate_answers"])
         summary = self._summary_from_text(primary)
         recommendation = self._recommendation_from_text(primary) if is_decision else None
         return {
@@ -824,6 +843,10 @@ class ReliabilityPipeline:
         text = candidates[0]["answer_text"].strip()
         text = re.sub(r"^Question:\s*.*?\n\n", "", text, flags=re.DOTALL)
         return text[:5000]
+
+    def _eval_answer_override(self, run: Dict[str, Any]) -> Optional[str]:
+        answer = str(run.get("answer_override") or "").strip()
+        return self._clean_model_text(answer)[:5000] if answer else None
 
     def _clean_model_text(self, text: str) -> str:
         cleaned = text.strip()
