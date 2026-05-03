@@ -4,7 +4,6 @@ import {
   createRun,
   deleteKey,
   fetchSourceUrl,
-  getBenchmarkReport,
   getDocuments,
   getKeys,
   getProviders,
@@ -23,7 +22,6 @@ import {
 } from "./components";
 import { Report, type ReportTab, TABS } from "./report";
 import type {
-  BenchmarkReport,
   DocumentMatch,
   DocumentView,
   ProviderKeyView,
@@ -35,15 +33,15 @@ import type {
 } from "./types";
 import "./styles.css";
 
-type WorkspaceView = "workbench" | "runs" | "sources" | "benchmarks" | "settings";
+type WorkspaceView = "chat" | "runs" | "sources" | "about" | "settings";
 
 const initialRunForm: RunCreate = {
-  question: "Should I build an LLM answer-reliability product?",
-  provider: "preview",
+  question: "",
+  provider: "tinker",
   model: null,
   samples: 3,
   max_cost_usd: 1,
-  use_live_provider: false,
+  use_live_provider: true,
 };
 
 function App() {
@@ -51,7 +49,6 @@ function App() {
   const [keys, setKeys] = useState<ProviderKeyView[]>([]);
   const [runs, setRuns] = useState<RunView[]>([]);
   const [documents, setDocuments] = useState<DocumentView[]>([]);
-  const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   const [form, setForm] = useState<RunCreate>(initialRunForm);
   const [keyProvider, setKeyProvider] = useState("tinker");
   const [keyValue, setKeyValue] = useState("");
@@ -59,7 +56,7 @@ function App() {
   const [graph, setGraph] = useState<ReliabilityGraph | null>(null);
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [activeTab, setActiveTab] = useState<ReportTab>(TABS[0]);
-  const [view, setView] = useState<WorkspaceView>("workbench");
+  const [view, setView] = useState<WorkspaceView>("chat");
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,18 +73,24 @@ function App() {
   }, [events, graph]);
 
   async function refresh() {
-    const [nextProviders, nextKeys, nextRuns, nextDocuments, nextBenchmarkReport] = await Promise.all([
+    const [nextProviders, nextKeys, nextRuns, nextDocuments] = await Promise.all([
       getProviders(),
       getKeys(),
       getRuns(),
       getDocuments(),
-      getBenchmarkReport(),
     ]);
-    setProviders(nextProviders.map(normalizeProvider));
+    const normalizedProviders = nextProviders;
+    setProviders(normalizedProviders);
     setKeys(nextKeys);
     setRuns(nextRuns);
     setDocuments(nextDocuments);
-    setBenchmarkReport(nextBenchmarkReport);
+    setForm((current) => selectDefaultProvider(current, normalizedProviders));
+    setKeyProvider((current) => {
+      if (normalizedProviders.some((provider) => provider.provider === current && isRealProvider(provider))) {
+        return current;
+      }
+      return normalizedProviders.find((provider) => provider.provider === "tinker")?.provider ?? current;
+    });
   }
 
   async function handleSaveKey(event: FormEvent) {
@@ -115,6 +118,17 @@ function App() {
   async function handleStartRun(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    const question = form.question.trim();
+    const selectedProvider = providers.find((provider) => provider.provider === form.provider);
+    if (question.length < 3) {
+      setError("Ask a question before starting an audit.");
+      return;
+    }
+    if (!selectedProvider || !isRealProvider(selectedProvider) || !isProviderConnected(selectedProvider)) {
+      setError("Connect Tinker or another LLM provider before asking a question.");
+      setView("settings");
+      return;
+    }
     setGraph(null);
     setEvents([]);
     setRunning(true);
@@ -122,11 +136,12 @@ function App() {
       const run = await createRun({
         ...form,
         model: form.model?.trim() ? form.model.trim() : null,
-        question: form.question.trim(),
-        use_live_provider: isPreviewProvider(form.provider) ? false : form.use_live_provider,
+        provider: selectedProvider.provider,
+        question,
+        use_live_provider: true,
       });
       setActiveRunId(run.run_id);
-      setView("workbench");
+      setView("chat");
       await streamRun(run.run_id);
       await refresh();
     } catch (err) {
@@ -171,7 +186,7 @@ function App() {
       setActiveRunId(runId);
       setGraph(run.graph);
       setEvents([]);
-      setView("workbench");
+      setView("chat");
       setActiveTab("Summary");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load run");
@@ -209,14 +224,14 @@ function App() {
           <div className="brand-mark" aria-hidden="true">RG</div>
           <div>
             <h1>ReliabilityGraph</h1>
-            <p>Reliability workspace</p>
+            <p>Answer audits</p>
           </div>
         </div>
         <nav className="main-nav" aria-label="Workspace">
-          <NavButton active={view === "workbench"} label="Workbench" onClick={() => setView("workbench")} />
+          <NavButton active={view === "chat"} label="Chat" onClick={() => setView("chat")} />
           <NavButton active={view === "runs"} label="Runs" onClick={() => setView("runs")} />
           <NavButton active={view === "sources"} label="Sources" onClick={() => setView("sources")} />
-          <NavButton active={view === "benchmarks"} label="Benchmarks" onClick={() => setView("benchmarks")} />
+          <NavButton active={view === "about"} label="About" onClick={() => setView("about")} />
           <NavButton active={view === "settings"} label="Settings" onClick={() => setView("settings")} />
         </nav>
         <button className="vault-card" type="button" onClick={() => setView("settings")}>
@@ -233,10 +248,10 @@ function App() {
           </div>
           <div className="header-actions">
             <button className="ghost-button hide-mobile" type="button" onClick={() => setView("settings")}>
-              Provider Vault
+              Providers
             </button>
-            <button className="primary-compact" type="button" onClick={() => setView("workbench")}>
-              New Audit
+            <button className="primary-compact" type="button" onClick={() => setView("chat")}>
+              New Question
             </button>
           </div>
         </header>
@@ -244,9 +259,9 @@ function App() {
         {error && <div className="error-banner">{error}</div>}
 
         <main>
-          {view === "workbench" && (
-            <>
-              <div className="upper-grid">
+          {view === "chat" && (
+            <div className="chat-grid">
+              <div className="chat-column">
                 <RunComposer
                   providers={providers}
                   form={form}
@@ -254,11 +269,13 @@ function App() {
                   running={running}
                   hasResult={Boolean(graph)}
                   onSubmit={handleStartRun}
+                  onOpenSettings={() => setView("settings")}
                 />
-                <TracePanel events={events} progress={progress} running={running} graph={graph} />
+                {graph && <AnswerCard graph={graph} />}
+                <Report graph={graph} activeTab={activeTab} setActiveTab={setActiveTab} />
               </div>
-              <Report graph={graph} activeTab={activeTab} setActiveTab={setActiveTab} />
-            </>
+              <TracePanel events={events} progress={progress} running={running} graph={graph} />
+            </div>
           )}
 
           {view === "runs" && <RunsPage runs={runs} activeRunId={activeRunId} onSelect={handleSelectRun} />}
@@ -273,7 +290,7 @@ function App() {
             />
           )}
 
-          {view === "benchmarks" && <BenchmarksPage graph={graph} report={benchmarkReport} />}
+          {view === "about" && <AboutPage />}
 
           {view === "settings" && (
             <SettingsPage
@@ -373,7 +390,7 @@ function SourcesPage({
     <section className="page-panel source-workspace">
       <div className="page-copy wide">
         <h3>Sources</h3>
-        <p>Add documents or source URLs before a run. The backend chunks them, builds local retrieval vectors, and matches claims to the most relevant chunks.</p>
+        <p>Add documents or source URLs before a run. The backend chunks them, builds retrieval vectors, and matches claims to the most relevant chunks.</p>
       </div>
       <div className="source-grid">
         <form className="panel source-form" onSubmit={submitDocument}>
@@ -445,74 +462,97 @@ function SourcesPage({
   );
 }
 
-function BenchmarksPage({ graph, report }: { graph: ReliabilityGraph | null; report: BenchmarkReport | null }) {
+function AnswerCard({ graph }: { graph: ReliabilityGraph }) {
   return (
-    <section className="page-panel benchmark-grid">
-      <div className="metric-tile">
-        <span>Calibration</span>
-        <strong>{report ? report.status.replaceAll("_", " ") : "Awaiting labeled runs"}</strong>
-      </div>
-      <div className="metric-tile">
-        <span>Labeled runs</span>
-        <strong>{report?.label_count ?? 0}</strong>
-      </div>
-      <div className="metric-tile">
-        <span>ECE</span>
-        <strong>{report?.ece == null ? "Needs labels" : report.ece.toFixed(3)}</strong>
-      </div>
-      <div className="metric-tile">
-        <span>Brier</span>
-        <strong>{report?.brier == null ? "Needs labels" : report.brier.toFixed(3)}</strong>
-      </div>
-      <div className="page-copy wide">
-        <h3>Benchmark Report</h3>
-        <p>{report?.summary ?? "Label completed runs to populate calibration and ablation analysis."}</p>
-      </div>
-      <TableCard title="Calibration Buckets" columns={["Range", "Runs", "Avg score", "Avg label"]} rows={(report?.buckets ?? []).map((bucket) => [
-        bucket.range,
-        String(bucket.count),
-        formatDecimal(bucket.avg_score),
-        formatDecimal(bucket.avg_correctness),
-      ])} />
-      <TableCard title="Ablations" columns={["Signal", "Avg score delta", "Runs"]} rows={(report?.ablations ?? []).map((row) => [
-        row.signal,
-        formatDecimal(row.avg_score_delta),
-        String(row.run_count),
-      ])} />
-    </section>
-  );
-}
-
-function TableCard({ title, columns, rows }: { title: string; columns: string[]; rows: string[][] }) {
-  return (
-    <section className="panel table-card">
-      <div className="section-heading">
-        <h2>{title}</h2>
-      </div>
-      {rows.length === 0 ? (
-        <p className="empty">No rows yet.</p>
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
-            </thead>
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>)}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <section className="answer-card" aria-label="Generated answer">
+      <div className="answer-card-header">
+        <div>
+          <span>Answer</span>
+          <h2>{formatProviderName(graph.run.provider)} · {graph.run.model ?? "auto"}</h2>
         </div>
-      )}
+        <div className="answer-score">
+          <strong>{graph.answer.reliability_score}</strong>
+          <span>/100</span>
+        </div>
+      </div>
+      <p>{graph.answer.final_answer}</p>
+      <div className="answer-facts">
+        <span>{graph.claims.length} claims</span>
+        <span>{graph.evidence.length} source matches</span>
+        <span>{graph.disagreement.semantic_clusters.length} answer clusters</span>
+      </div>
     </section>
   );
 }
 
-function formatDecimal(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(3) : "0.000";
+function AboutPage() {
+  const papers = [
+    {
+      title: "FActScore",
+      href: "https://aclanthology.org/2023.emnlp-main.741/",
+      body: "Atomic fact decomposition and source support checks for long-form answers.",
+    },
+    {
+      title: "SelfCheckGPT",
+      href: "https://arxiv.org/abs/2303.08896",
+      body: "Sampling consistency as a black-box hallucination signal.",
+    },
+    {
+      title: "Semantic Entropy",
+      href: "https://www.nature.com/articles/s41586-024-07421-0",
+      body: "Meaning-level disagreement across samples as an uncertainty signal.",
+    },
+    {
+      title: "SAFE / LongFact",
+      href: "https://arxiv.org/abs/2403.18802",
+      body: "Search-augmented factuality evaluation for long-form model outputs.",
+    },
+    {
+      title: "Calibration",
+      href: "https://proceedings.mlr.press/v70/guo17a.html",
+      body: "Reliability diagrams, ECE, and Brier-style thinking for score quality.",
+    },
+    {
+      title: "Unfaithful CoT",
+      href: "https://arxiv.org/abs/2305.04388",
+      body: "Why the product treats hidden chain-of-thought as evidence only when the provider explicitly returns it.",
+    },
+    {
+      title: "Tinker True-Thinking Score",
+      href: "https://tinker-docs.thinkingmachines.ai/cookbook/recipes/true-thinking-score/",
+      body: "Perturbation-style tests that ask whether a reasoning step changes the final answer.",
+    },
+  ];
+
+  return (
+    <section className="about-page">
+      <div className="about-hero">
+        <span>About ReliabilityGraph</span>
+        <h2>Answer first. Evidence immediately after.</h2>
+        <p>
+          ReliabilityGraph runs the provider answer through source matching, claim checks, disagreement analysis,
+          perturbation probes, and calibration signals. It shows observable steps from the run; it does not invent
+          hidden reasoning traces.
+        </p>
+      </div>
+      <div className="about-grid">
+        {papers.map((paper) => (
+          <a className="research-card" href={paper.href} key={paper.title} rel="noreferrer" target="_blank">
+            <strong>{paper.title}</strong>
+            <p>{paper.body}</p>
+          </a>
+        ))}
+      </div>
+      <section className="panel about-note">
+        <h2>How Tinker fits</h2>
+        <p>
+          Tinker is one supported LLM provider. Its probe is an optional extra run for perturbation consistency:
+          paraphrase pressure, false-premise pressure, and authority pressure. That is behavioral evidence, not
+          special access to hidden reasoning.
+        </p>
+      </section>
+    </section>
+  );
 }
 
 function SettingsPage(props: {
@@ -534,11 +574,11 @@ function SettingsPage(props: {
           <p>Choose the provider mix for higher-quality audits.</p>
         </div>
         <div className="provider-readiness-list">
-          {props.providers.map((provider) => (
+          {props.providers.filter(isRealProvider).map((provider) => (
             <div className="provider-readiness-row" key={provider.provider}>
               <span className={`status-dot status-${provider.key_state}`} />
               <strong>{provider.label}</strong>
-              <span>{provider.key_state === "not_required" ? "ready" : provider.key_state}</span>
+              <span>{isProviderConnected(provider) ? "connected" : "missing key"}</span>
             </div>
           ))}
         </div>
@@ -550,33 +590,62 @@ function SettingsPage(props: {
 function headerTitle(view: WorkspaceView): string {
   if (view === "runs") return "Runs";
   if (view === "sources") return "Sources";
-  if (view === "benchmarks") return "Benchmarks";
-  if (view === "settings") return "Provider vault";
-  return "Workbench";
+  if (view === "about") return "About";
+  if (view === "settings") return "Providers";
+  return "Ask a question";
 }
 
 function headerSubtitle(view: WorkspaceView): string {
   if (view === "runs") return "Review previous audits and reopen their evidence graphs.";
   if (view === "sources") return "Inspect source coverage and claim-linked evidence.";
-  if (view === "benchmarks") return "Track diagnostic score quality as labeled runs accumulate.";
+  if (view === "about") return "Research basis, design limits, and provider behavior.";
   if (view === "settings") return "Connect Tinker, OpenAI, Claude, Gemini, and OpenRouter keys.";
-  return "Ask a question. Get a clear reliability audit.";
+  return "Ask with a connected provider, then inspect the answer and every observable audit step.";
 }
 
-function isPreviewProvider(provider: string): boolean {
-  return provider === "preview" || provider === "local";
+function formatProviderName(provider: string): string {
+  if (provider === "openrouter") return "OpenRouter";
+  return provider.slice(0, 1).toUpperCase() + provider.slice(1);
+}
+
+function isRealProvider(provider: ProviderMetadata): boolean {
+  return provider.provider !== "preview" && provider.provider !== "local";
+}
+
+function isProviderConnected(provider: ProviderMetadata): boolean {
+  return provider.key_state === "saved" || provider.key_state === "env";
 }
 
 function providerSummary(providers: ProviderMetadata[]): string {
-  const connected = providers.filter((provider) => provider.key_state === "saved" || provider.key_state === "env").length;
+  const connected = providers.filter((provider) => isRealProvider(provider) && isProviderConnected(provider)).length;
   return `${connected} connected`;
 }
 
-function normalizeProvider(provider: ProviderMetadata): ProviderMetadata {
-  if (provider.provider === "preview" || provider.provider === "local") {
-    return { ...provider, label: "Core Engine" };
+function selectDefaultProvider(current: RunCreate, providers: ProviderMetadata[]): RunCreate {
+  const currentProvider = providers.find((provider) => provider.provider === current.provider);
+  if (currentProvider && isRealProvider(currentProvider) && isProviderConnected(currentProvider)) {
+    return {
+      ...current,
+      model: current.model ?? currentProvider.default_model,
+      use_live_provider: true,
+    };
   }
-  return provider;
+
+  const tinker = providers.find((provider) => provider.provider === "tinker" && isProviderConnected(provider));
+  const connected = providers.find((provider) => isRealProvider(provider) && isProviderConnected(provider));
+  const fallback =
+    tinker ??
+    connected ??
+    providers.find((provider) => provider.provider === "tinker") ??
+    providers.find(isRealProvider);
+
+  if (!fallback) return current;
+  return {
+    ...current,
+    provider: fallback.provider,
+    model: fallback.default_model,
+    use_live_provider: isProviderConnected(fallback),
+  };
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);

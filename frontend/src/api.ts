@@ -1,4 +1,4 @@
-import type { BenchmarkReport, DocumentMatch, DocumentView, ProviderKeyView, ProviderMetadata, RunCreate, RunView } from "./types";
+import type { DocumentMatch, DocumentView, ProviderKeyView, ProviderMetadata, RunCreate, RunView } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -81,10 +81,6 @@ export async function fetchSourceUrl(url: string): Promise<DocumentView> {
 export async function searchDocuments(q: string): Promise<DocumentMatch[]> {
   const data = await request<{ matches: DocumentMatch[] }>(`/api/documents/search?q=${encodeURIComponent(q)}`);
   return data.matches;
-}
-
-export async function getBenchmarkReport(): Promise<BenchmarkReport> {
-  return request<BenchmarkReport>("/api/benchmarks/report");
 }
 
 export function exportUrl(runId: string): string {

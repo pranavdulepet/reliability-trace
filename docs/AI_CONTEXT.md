@@ -6,6 +6,8 @@ Read this first when modifying the repo.
 
 ReliabilityGraph answers one question: should the user trust this answer? The product must show observable evidence, not hidden chain-of-thought. Every run produces a Reliability Evidence Graph that can be inspected and exported.
 
+The primary UI is Chat. Users connect at least one LLM provider, ask a question, watch the observable trace stream, then read the generated answer followed by reliability analysis. Do not add alternate "offline" or "simple" answer paths to the main UI.
+
 For implementation status, read `docs/PLAN_STATUS.md` before assuming a section of `plan.md` is already complete.
 
 ## Non-Negotiables

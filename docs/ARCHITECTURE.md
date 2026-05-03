@@ -24,10 +24,11 @@ SQLite is the local storage target because it keeps setup small. The storage lay
 
 The frontend is a React + TypeScript app. It presents:
 
+- Chat-first question flow with provider-backed answer generation.
 - Provider vault and readiness controls.
-- A question workbench with progressive provider and run options.
 - Source upload, URL fetch, source search, and run evidence review.
-- A live trace panel.
+- A live observable trace panel for provider calls, retrieval, checks, probes, and scoring.
+- About page with the research basis and trace limits.
 - Report tabs for Summary, Claims, Sources, Assumptions, Decision, Disagreement, Checks, Calibration, Tinker Probe, and Export.
 
 ## Provider Boundary

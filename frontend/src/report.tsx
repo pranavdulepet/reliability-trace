@@ -26,8 +26,8 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
   if (!graph) {
     return (
       <section className="report-shell empty-report">
-        <h2>Evidence graph</h2>
-        <p>Your summary will appear here after the audit finishes.</p>
+        <h2>Reliability analysis</h2>
+        <p>The full claim, source, disagreement, calibration, and probe report appears after the audit finishes.</p>
       </section>
     );
   }
@@ -36,7 +36,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
     <section className="report-shell">
       <div className="report-header">
         <div>
-          <h2>Latest result</h2>
+          <h2>Reliability analysis</h2>
           <p>
             {graph.run.question_type} · {formatProvider(graph.run.provider)}
           </p>
@@ -311,7 +311,7 @@ function formatNumber(value: number): string {
 }
 
 function formatProvider(provider: string): string {
-  if (provider === "local" || provider === "preview") return "Core Engine";
+  if (provider === "local" || provider === "preview") return "Preview";
   if (provider === "openrouter") return "OpenRouter";
   return provider.slice(0, 1).toUpperCase() + provider.slice(1);
 }

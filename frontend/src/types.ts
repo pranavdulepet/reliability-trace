@@ -55,25 +55,6 @@ export interface DocumentMatch {
   relevance_score: number;
 }
 
-export interface BenchmarkReport {
-  status: string;
-  label_count: number;
-  ece: number | null;
-  brier: number | null;
-  summary: string;
-  buckets: Array<{
-    range: string;
-    count: number;
-    avg_score: number;
-    avg_correctness: number;
-  }>;
-  ablations: Array<{
-    signal: string;
-    avg_score_delta: number;
-    run_count: number;
-  }>;
-}
-
 export interface TraceSpan {
   span_id: string;
   run_id: string;

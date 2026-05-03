@@ -50,4 +50,4 @@ python3 -m pytest
 cd frontend && npm run build
 ```
 
-Use local diagnostic runs for fast UI checks. Enable live provider calls only when you want to spend API credits.
+For end-to-end product checks, connect at least one provider key in Settings and run a Chat audit. Keep provider keys in the encrypted vault or environment variables; never commit them.

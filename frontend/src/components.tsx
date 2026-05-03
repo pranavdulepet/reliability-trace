@@ -26,7 +26,7 @@ export function KeyManager({
   return (
     <section className="panel key-panel">
       <div className="section-heading">
-        <h2>Provider Vault</h2>
+        <h2>Providers</h2>
         <p>Keys are encrypted before storage and shown only as fingerprints.</p>
       </div>
       <form className="inline-form" onSubmit={onSave}>
@@ -48,7 +48,7 @@ export function KeyManager({
       </form>
       <div className="key-list">
         {keys.length === 0 ? (
-          <p className="empty">No provider keys saved yet. Built-in audits remain available.</p>
+          <p className="empty">No provider keys saved yet. Connect Tinker or another provider before asking a question.</p>
         ) : (
           keys.map((key) => (
             <div className="key-row" key={key.provider}>
@@ -74,32 +74,34 @@ interface RunComposerProps {
   running: boolean;
   hasResult: boolean;
   onSubmit: (event: FormEvent) => void;
+  onOpenSettings: () => void;
 }
 
-export function RunComposer({ providers, form, setForm, running, hasResult, onSubmit }: RunComposerProps) {
+export function RunComposer({ providers, form, setForm, running, hasResult, onSubmit, onOpenSettings }: RunComposerProps) {
+  const realProviders = providers.filter(isRealProvider);
   const selectedProvider = providers.find((provider) => provider.provider === form.provider);
-  const providerReady = selectedProvider?.key_state === "saved" || selectedProvider?.key_state === "env";
-  const isPreview = form.provider === "preview" || form.provider === "local";
+  const providerReady = Boolean(selectedProvider && isProviderConnected(selectedProvider));
+  const hasConnectedProvider = realProviders.some(isProviderConnected);
   return (
-    <section className="panel composer hero-panel">
+    <section className="panel composer chat-composer">
       <div className="section-heading">
         <h2>Ask</h2>
-        <p>We’ll audit the answer and show what supports it, what weakens it, and what would change it.</p>
+        <p>Connect a provider, ask, then inspect the answer and every observable audit step.</p>
       </div>
       <form onSubmit={onSubmit}>
         <textarea
           value={form.question}
           onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))}
-          placeholder="Should I build an LLM answer-reliability product?"
+          placeholder="Ask anything you want verified..."
         />
         <div className="composer-meta">
           <span>{form.question.length} / 12000</span>
-          <span>Shift + Enter for a new line</span>
+          <span>{providerReady ? `${selectedProvider?.label} connected` : "Provider required"}</span>
         </div>
         <div className="provider-choice-header">
           <div>
             <h3>Providers</h3>
-            <p>Start simple, or use a connected provider when you want live candidates.</p>
+            <p>{hasConnectedProvider ? "Choose the model endpoint for this answer." : "Connect a key before starting."}</p>
           </div>
           <details className="advanced-options">
             <summary>Options</summary>
@@ -137,8 +139,8 @@ export function RunComposer({ providers, form, setForm, running, hasResult, onSu
           </details>
         </div>
         <div className="provider-card-grid" role="radiogroup" aria-label="Provider">
-          {providers.map((provider) => {
-            const ready = provider.key_state === "saved" || provider.key_state === "env" || provider.key_state === "not_required";
+          {realProviders.map((provider) => {
+            const ready = isProviderConnected(provider);
             const selected = form.provider === provider.provider;
             return (
               <button
@@ -152,33 +154,33 @@ export function RunComposer({ providers, form, setForm, running, hasResult, onSu
                     ...current,
                     provider: provider.provider,
                     model: provider.default_model ?? null,
-                    use_live_provider: provider.key_state === "saved" || provider.key_state === "env",
+                    use_live_provider: ready,
                   }));
                 }}
               >
                 <span className="provider-logo">{provider.label.slice(0, 1)}</span>
                 <span>
                   <strong>{provider.label}</strong>
-                  <small>{ready ? provider.key_state === "not_required" ? "Smart default" : "Connected" : "Add key"}</small>
+                  <small>{ready ? "Connected" : "Add key"}</small>
                 </span>
               </button>
             );
           })}
         </div>
-        <label className="check-row">
-          <input
-            checked={form.use_live_provider}
-            disabled={isPreview || !providerReady}
-            type="checkbox"
-            onChange={(event) => setForm((current) => ({ ...current, use_live_provider: event.target.checked }))}
-          />
-          Use connected provider for candidate generation
-        </label>
+        {!providerReady && (
+          <div className="provider-required">
+            <strong>Provider required</strong>
+            <p>ReliabilityGraph needs Tinker, OpenAI, Claude, Gemini, or OpenRouter to generate real answers.</p>
+            <button className="ghost-button" type="button" onClick={onOpenSettings}>
+              Connect provider
+            </button>
+          </div>
+        )}
         <div className="run-action-row">
-          <button className="primary-action" disabled={running || form.question.trim().length < 3} type="submit">
-            {running ? "Auditing" : "Run audit"}
+          <button className="primary-action" disabled={running || !providerReady || form.question.trim().length < 3} type="submit">
+            {running ? "Auditing" : "Ask & audit"}
           </button>
-          <span>{hasResult ? "Your latest result is below." : "Typical audit takes under a minute."}</span>
+          <span>{hasResult ? "Latest answer and reliability analysis are below." : "The trace appears as the answer generates."}</span>
         </div>
       </form>
     </section>
@@ -197,14 +199,16 @@ export function TracePanel({ events, progress, running, graph }: TracePanelProps
     return (
       <section className="panel trace-panel">
         <div className="section-heading">
-          <h2>Audit Plan</h2>
-          <p>The timeline appears when an audit starts.</p>
+          <h2>Observable Trace</h2>
+          <p>The run will stream provider calls, retrieval, checks, and scoring here.</p>
         </div>
         <div className="plan-list">
           {[
-            ["Generate answers", "Collect independent candidate responses."],
-            ["Find claims", "Break the answer into checkable pieces."],
-            ["Check reliability", "Score support, uncertainty, and robustness."],
+            ["Provider call", "Generate answer candidates from the selected model."],
+            ["Source retrieval", "Search uploaded and fetched sources for relevant chunks."],
+            ["Claim extraction", "Break the answer into checkable statements."],
+            ["Source matching", "Map claims to support, contradiction, or missing evidence."],
+            ["Reliability score", "Combine support, uncertainty, disagreement, and probes."],
           ].map(([title, body]) => (
             <div className="plan-row" key={title}>
               <strong>{title}</strong>
@@ -220,8 +224,8 @@ export function TracePanel({ events, progress, running, graph }: TracePanelProps
     <section className="panel trace-panel">
       <div className="section-heading horizontal">
         <div>
-          <h2>Audit Timeline</h2>
-          <p>{running ? "Streaming evidence graph events" : "Complete"}</p>
+          <h2>Observable Trace</h2>
+          <p>{running ? "Streaming run events" : "Complete"}</p>
         </div>
         <strong>{Math.round(progress * 100)}%</strong>
       </div>
@@ -234,14 +238,37 @@ export function TracePanel({ events, progress, running, graph }: TracePanelProps
         ) : (
           events.map((event, index) => (
             <li key={`${event.message}-${index}`}>
-              <span>{event.span?.type ?? event.type}</span>
+              <div className="trace-line">
+                <span>{formatTraceType(event.span?.type ?? event.type)}</span>
+                {event.span?.cost_usd ? <small>${event.span.cost_usd.toFixed(4)}</small> : null}
+              </div>
               <p>{event.message}</p>
+              {event.span?.input_summary && <code>{event.span.input_summary}</code>}
+              {event.span?.output_summary && <code>{event.span.output_summary}</code>}
+              {event.span?.risk_flags?.length ? (
+                <div className="trace-flags">
+                  {event.span.risk_flags.map((flag) => <em key={flag}>{flag}</em>)}
+                </div>
+              ) : null}
             </li>
           ))
         )}
       </ol>
     </section>
   );
+}
+
+function isRealProvider(provider: ProviderMetadata): boolean {
+  return provider.provider !== "preview" && provider.provider !== "local";
+}
+
+function isProviderConnected(provider: ProviderMetadata): boolean {
+  return provider.key_state === "saved" || provider.key_state === "env";
+}
+
+function formatTraceType(value: string): string {
+  const normalized = value.replaceAll("_", " ");
+  return normalized.toLowerCase() === "causal probe" ? "Tinker probe" : normalized;
 }
 
 interface RunHistoryProps {
