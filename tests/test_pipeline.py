@@ -53,7 +53,7 @@ def test_pipeline_builds_complete_decision_graph():
     assert "likely correct" not in json.dumps(graph).lower()
 
 
-def test_pipeline_marks_closed_model_causal_probe_unavailable():
+def test_pipeline_marks_perturbation_probe_unavailable_without_live_provider():
     events = run_pipeline(
         base_run(
             provider="openai",
@@ -63,8 +63,9 @@ def test_pipeline_marks_closed_model_causal_probe_unavailable():
     )
     graph = events[-1]["graph"]
 
-    assert graph["causal_probe"]["available"] is False
-    assert graph["causal_probe"]["mode"] == "not_available"
+    assert graph["perturbation_probe"]["available"] is False
+    assert graph["perturbation_probe"]["mode"] == "not_available"
+    assert graph["causal_probe"] == graph["perturbation_probe"]
 
 
 def test_pipeline_uses_document_evidence_for_claim_matching():
@@ -88,7 +89,7 @@ def test_pipeline_uses_document_evidence_for_claim_matching():
     assert any(assessment["status"] in {"supported", "partially_supported"} for assessment in graph["claim_assessments"])
 
 
-def test_pipeline_requires_tinker_key_for_perturbation_probe():
+def test_pipeline_requires_provider_key_for_perturbation_probe():
     events = run_pipeline(
         base_run(
             provider="tinker",
@@ -98,5 +99,5 @@ def test_pipeline_requires_tinker_key_for_perturbation_probe():
     )
     graph = events[-1]["graph"]
 
-    assert graph["causal_probe"]["available"] is False
-    assert graph["causal_probe"]["mode"] == "missing_key"
+    assert graph["perturbation_probe"]["available"] is False
+    assert graph["perturbation_probe"]["mode"] == "missing_key"

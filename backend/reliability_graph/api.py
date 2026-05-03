@@ -11,7 +11,16 @@ from .config import ENV_KEY_BY_PROVIDER, settings
 from .pipeline import ReliabilityPipeline
 from .providers import list_provider_metadata
 from .retrieval import build_chunks, fetch_url_text, search_chunks
-from .schemas import DocumentCreate, ProviderKeyCreate, RunCreate, RunLabelCreate, SourceFetchCreate
+from .schemas import (
+    ConversationCreate,
+    ConversationMessageCreate,
+    DocumentCreate,
+    ProviderKeyCreate,
+    ProviderPreferenceUpdate,
+    RunCreate,
+    RunLabelCreate,
+    SourceFetchCreate,
+)
 from .secrets import KeyVault
 from .storage import Storage
 
@@ -51,6 +60,26 @@ def providers():
     return {"providers": list_provider_metadata(saved, env_keys)}
 
 
+@app.get("/api/provider-preferences")
+def get_provider_preferences():
+    preference = storage.get_provider_preference(settings.user_id)
+    return {"preference": preference, "resolved": _resolve_provider_defaults(None, strict=False)}
+
+
+@app.put("/api/provider-preferences")
+def save_provider_preferences(payload: ProviderPreferenceUpdate):
+    if payload.provider and payload.provider not in _connected_providers():
+        raise HTTPException(status_code=400, detail="provider is not connected")
+    preference = storage.save_provider_preference(
+        settings.user_id,
+        payload.provider,
+        payload.model.strip() if payload.model else None,
+        payload.samples,
+        payload.max_cost_usd,
+    )
+    return {"preference": preference, "resolved": _resolve_provider_defaults(None, strict=False)}
+
+
 @app.get("/api/keys")
 def list_keys():
     return {"keys": storage.list_provider_keys(settings.user_id)}
@@ -74,12 +103,74 @@ def delete_key(provider: str):
 @app.post("/api/runs", status_code=201)
 def create_run(payload: RunCreate):
     storage.init_db()
+    payload = _run_with_provider_defaults(payload)
     return storage.create_run(settings.user_id, payload)
 
 
 @app.get("/api/runs")
 def list_runs():
     return {"runs": storage.list_runs(settings.user_id)}
+
+
+@app.get("/api/conversations")
+def list_conversations():
+    return {"conversations": storage.list_conversations(settings.user_id)}
+
+
+@app.post("/api/conversations", status_code=201)
+def create_conversation(payload: ConversationCreate):
+    return storage.create_conversation(settings.user_id, payload.title)
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(conversation_id: str):
+    try:
+        return storage.get_conversation(settings.user_id, conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="conversation not found") from exc
+
+
+@app.post("/api/conversations/{conversation_id}/messages", status_code=201)
+def create_conversation_message(conversation_id: str, payload: ConversationMessageCreate):
+    try:
+        conversation = storage.get_conversation(settings.user_id, conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="conversation not found") from exc
+
+    attachment_document_ids = _validate_attachment_document_ids(payload.attachment_document_ids)
+    prior_context = [
+        {"role": message["role"], "content": message["content"][:1800]}
+        for message in conversation["messages"][-10:]
+        if message["role"] in {"user", "assistant"}
+    ]
+    user_message = storage.add_message(
+        settings.user_id,
+        conversation_id,
+        "user",
+        payload.content.strip(),
+        attachment_document_ids=attachment_document_ids,
+    )
+    if len(conversation["messages"]) == 0:
+        storage.update_conversation_title(settings.user_id, conversation_id, _conversation_title(payload.content))
+
+    run_payload = _run_with_provider_defaults(
+        RunCreate(
+            question=payload.content.strip(),
+            provider=payload.provider,
+            model=payload.model,
+            samples=payload.samples or storage.get_provider_preference(settings.user_id)["samples"],
+            max_cost_usd=payload.max_cost_usd
+            if payload.max_cost_usd is not None
+            else storage.get_provider_preference(settings.user_id)["max_cost_usd"],
+            use_live_provider=True,
+            conversation_id=conversation_id,
+            user_message_id=user_message["message_id"],
+            prior_context=prior_context,
+            attachment_document_ids=attachment_document_ids,
+        )
+    )
+    run = storage.create_run(settings.user_id, run_payload)
+    return {"message": user_message, "run": run}
 
 
 @app.get("/api/runs/{run_id}")
@@ -186,12 +277,21 @@ async def stream_run_events(run_id: str):
 
     async def generate():
         if run["status"] == "completed" and run.get("graph"):
+            if run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+                storage.add_message(
+                    settings.user_id,
+                    run["conversation_id"],
+                    "assistant",
+                    run["graph"]["answer"]["final_answer"],
+                    run_id=run_id,
+                )
             yield _sse({"type": "completed", "progress": 1.0, "message": "Run already completed", "graph": run["graph"]})
             return
 
         storage.set_run_status(settings.user_id, run_id, "running")
+        attachment_document_ids = run.get("attachment_document_ids", [])
         pipeline = ReliabilityPipeline(
-            retrieval_chunks=storage.list_document_chunks(settings.user_id),
+            retrieval_chunks=storage.list_document_chunks(settings.user_id, attachment_document_ids),
             calibration_report=build_benchmark_report(storage.list_labeled_runs(settings.user_id)),
         )
         trace = []
@@ -200,6 +300,14 @@ async def stream_run_events(run_id: str):
                 if event["type"] == "completed":
                     trace = event["trace"]
                     storage.complete_run(settings.user_id, run_id, event["graph"], trace)
+                    if run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+                        storage.add_message(
+                            settings.user_id,
+                            run["conversation_id"],
+                            "assistant",
+                            event["graph"]["answer"]["final_answer"],
+                            run_id=run_id,
+                        )
                 yield _sse(event)
         except Exception as exc:
             storage.fail_run(settings.user_id, run_id, str(exc), trace)
@@ -213,6 +321,72 @@ def _get_run_or_404(run_id: str):
         return storage.get_run(settings.user_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
+
+
+def _connected_providers():
+    saved = [row["provider"] for row in storage.list_provider_keys(settings.user_id)]
+    env_keys = [provider for provider, env_var in ENV_KEY_BY_PROVIDER.items() if os.getenv(env_var)]
+    return sorted(set(saved + env_keys))
+
+
+def _resolve_provider_defaults(provider: Optional[str], strict: bool = True):
+    connected = _connected_providers()
+    preference = storage.get_provider_preference(settings.user_id)
+    selected = provider or preference.get("provider")
+    if selected:
+        if selected not in connected:
+            if not strict:
+                return None
+            raise HTTPException(status_code=400, detail="selected provider is not connected")
+        return {
+            "provider": selected,
+            "model": preference.get("model"),
+            "samples": preference.get("samples", 3),
+            "max_cost_usd": preference.get("max_cost_usd", 1.0),
+        }
+    if len(connected) == 1:
+        return {
+            "provider": connected[0],
+            "model": None,
+            "samples": preference.get("samples", 3),
+            "max_cost_usd": preference.get("max_cost_usd", 1.0),
+        }
+    if len(connected) == 0:
+        if not strict:
+            return None
+        raise HTTPException(status_code=400, detail="connect an LLM provider in Settings before asking a question")
+    if not strict:
+        return None
+    raise HTTPException(status_code=400, detail="choose a default provider in Settings")
+
+
+def _run_with_provider_defaults(payload: RunCreate) -> RunCreate:
+    defaults = _resolve_provider_defaults(payload.provider)
+    preference = storage.get_provider_preference(settings.user_id)
+    return payload.model_copy(
+        update={
+            "provider": defaults["provider"],
+            "model": payload.model or preference.get("model") or defaults.get("model"),
+            "samples": payload.samples or defaults["samples"],
+            "max_cost_usd": payload.max_cost_usd if payload.max_cost_usd is not None else defaults["max_cost_usd"],
+            "use_live_provider": True,
+        }
+    )
+
+
+def _validate_attachment_document_ids(document_ids):
+    if not document_ids:
+        return []
+    available = {document["document_id"] for document in storage.list_documents(settings.user_id)}
+    missing = [document_id for document_id in document_ids if document_id not in available]
+    if missing:
+        raise HTTPException(status_code=400, detail="attachment document not found")
+    return document_ids
+
+
+def _conversation_title(content: str) -> str:
+    title = " ".join(content.strip().split())
+    return title[:56] + ("..." if len(title) > 56 else "")
 
 
 def _sse(event):
