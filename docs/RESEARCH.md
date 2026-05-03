@@ -58,4 +58,4 @@ Signals under test:
 
 ## 6. Status
 
-The current product marks scores as uncalibrated diagnostic values until this report has empirical calibration data.
+The product now builds a local calibration report from user-labeled completed runs. Scores remain diagnostic until labels cover the target workload with enough diversity for stable calibration.

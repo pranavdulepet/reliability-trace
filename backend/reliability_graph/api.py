@@ -2,14 +2,16 @@ import json
 import os
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .benchmarks import build_benchmark_report
 from .config import ENV_KEY_BY_PROVIDER, settings
 from .pipeline import ReliabilityPipeline
 from .providers import list_provider_metadata
-from .schemas import ProviderKeyCreate, RunCreate, RunLabelCreate
+from .retrieval import build_chunks, fetch_url_text, search_chunks
+from .schemas import DocumentCreate, ProviderKeyCreate, RunCreate, RunLabelCreate, SourceFetchCreate
 from .secrets import KeyVault
 from .storage import Storage
 
@@ -121,6 +123,55 @@ def label_run(run_id: str, payload: RunLabelCreate):
         raise HTTPException(status_code=404, detail="run not found") from exc
 
 
+@app.get("/api/documents")
+def list_documents():
+    return {"documents": storage.list_documents(settings.user_id)}
+
+
+@app.post("/api/documents", status_code=201)
+def save_document(payload: DocumentCreate):
+    chunks = build_chunks(payload.text)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="document did not contain indexable text")
+    return storage.save_document(
+        settings.user_id,
+        payload.title.strip(),
+        payload.text,
+        payload.source_url,
+        payload.source_type.strip() or "uploaded_document",
+        chunks,
+    )
+
+
+@app.post("/api/documents/fetch", status_code=201)
+def fetch_document(payload: SourceFetchCreate):
+    try:
+        fetched = fetch_url_text(payload.url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    chunks = build_chunks(fetched["text"])
+    if not chunks:
+        raise HTTPException(status_code=400, detail="source did not contain indexable text")
+    return storage.save_document(
+        settings.user_id,
+        fetched["title"][:300],
+        fetched["text"],
+        fetched["source_url"],
+        "web_page",
+        chunks,
+    )
+
+
+@app.get("/api/documents/search")
+def search_documents(q: str = Query(min_length=1, max_length=1000), limit: int = Query(default=8, ge=1, le=30)):
+    return {"matches": search_chunks(q, storage.list_document_chunks(settings.user_id), limit=limit)}
+
+
+@app.get("/api/benchmarks/report")
+def benchmark_report():
+    return build_benchmark_report(storage.list_labeled_runs(settings.user_id))
+
+
 @app.get("/api/runs/{run_id}/events")
 async def stream_run_events(run_id: str):
     run = _get_run_or_404(run_id)
@@ -139,7 +190,10 @@ async def stream_run_events(run_id: str):
             return
 
         storage.set_run_status(settings.user_id, run_id, "running")
-        pipeline = ReliabilityPipeline()
+        pipeline = ReliabilityPipeline(
+            retrieval_chunks=storage.list_document_chunks(settings.user_id),
+            calibration_report=build_benchmark_report(storage.list_labeled_runs(settings.user_id)),
+        )
         trace = []
         try:
             async for event in pipeline.run(run, resolve_key):

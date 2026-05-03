@@ -26,3 +26,5 @@ def post_json(url: str, headers: Dict[str, str], payload: Dict[str, Any], timeou
         raise ProviderError("provider HTTP %s: %s" % (exc.code, body[:600])) from exc
     except urllib.error.URLError as exc:
         raise ProviderError("provider request failed: %s" % exc.reason) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ProviderError("provider request failed: %s" % exc) from exc

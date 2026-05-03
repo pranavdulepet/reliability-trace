@@ -1,6 +1,6 @@
 # ReliabilityGraph
 
-ReliabilityGraph is a BYOK answer-reliability workspace for serious questions and decisions. It builds an observable Evidence Graph for a single answer: claims, evidence, assumptions, disagreement, robustness tests, scoring features, trace spans, calibration status, and optional Tinker causal-probe metadata.
+ReliabilityGraph is a BYOK answer-reliability workspace for serious questions and decisions. It builds an observable Evidence Graph for a single answer: claims, source evidence, assumptions, disagreement, robustness tests, scoring features, trace spans, calibration status, and optional Tinker perturbation metadata.
 
 ## Local Run
 
@@ -31,10 +31,10 @@ cd frontend && npm run build
 
 ## Current Shape
 
-- `backend/reliability_graph`: FastAPI API, SQLite storage, encrypted key vault, provider adapters, reliability graph pipeline.
-- `frontend/src`: React + TypeScript workbench for key management, chat/run creation, SSE trace streaming, report tabs, and JSON export.
+- `backend/reliability_graph`: FastAPI API, SQLite storage, encrypted key vault, source retrieval, benchmark reporting, provider adapters, reliability graph pipeline.
+- `frontend/src`: React + TypeScript workbench for key management, source ingestion, chat/run creation, SSE trace streaming, report tabs, and JSON export.
 - `docs`: short architecture and operating docs written for both engineers and AI coding assistants.
-- `tests`: direct tests for scoring, encryption, provider safety, and graph generation.
+- `tests`: direct tests for scoring, encryption, provider safety, retrieval, benchmark reporting, and graph generation.
 
 ## Safety Defaults
 
@@ -42,4 +42,4 @@ cd frontend && npm run build
 - Live provider calls are opt-in per run.
 - Runs have sample limits and user-visible cost caps.
 - The score is a diagnostic `X / 100`, not a calibrated correctness probability.
-- Closed-provider output is treated as observable behavior only; Tinker causal-probe mode is clearly labeled separately.
+- Closed-provider output is treated as observable behavior only; Tinker perturbation output is clearly labeled as behavioral evidence, not hidden reasoning.

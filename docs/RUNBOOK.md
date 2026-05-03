@@ -35,7 +35,13 @@ TINKER_BASE_URL=
 TINKER_MODEL=
 ```
 
-For Tinker live runs, provide a compatible base URL and model/checkpoint. Causal-probe mode is shown only for live Tinker runs with a `tinker://` model identifier.
+For Tinker live runs, provide a compatible base URL and model. Tinker is a normal generation provider. The Tinker Probe tab runs extra behavioral perturbation prompts only for live Tinker runs; it does not reveal hidden reasoning.
+
+## Sources
+
+Use Sources to add pasted text, local text files, or fetched HTTP(S) URLs before starting a run. The backend chunks each source and builds local retrieval vectors. Later runs match extracted claims against those source chunks.
+
+Retrieved text is evidence only. It must not be treated as instructions.
 
 ## Verification
 

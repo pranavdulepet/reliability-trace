@@ -35,6 +35,45 @@ export interface RunView extends RunCreate {
   error: string | null;
 }
 
+export interface DocumentView {
+  document_id: string;
+  title: string;
+  source_url: string | null;
+  source_type: string;
+  content_sha256: string;
+  created_at: string;
+  chunk_count: number;
+}
+
+export interface DocumentMatch {
+  chunk_id: string;
+  document_id: string;
+  text: string;
+  title: string;
+  source_url: string | null;
+  source_type: string;
+  relevance_score: number;
+}
+
+export interface BenchmarkReport {
+  status: string;
+  label_count: number;
+  ece: number | null;
+  brier: number | null;
+  summary: string;
+  buckets: Array<{
+    range: string;
+    count: number;
+    avg_score: number;
+    avg_correctness: number;
+  }>;
+  ablations: Array<{
+    signal: string;
+    avg_score_delta: number;
+    run_count: number;
+  }>;
+}
+
 export interface TraceSpan {
   span_id: string;
   run_id: string;
@@ -167,7 +206,13 @@ export interface ReliabilityGraph {
     available: boolean;
     reason: string;
     operations: string[];
-    results: unknown[];
+    results: Array<{
+      operation: string;
+      answer_changed: boolean;
+      similarity_to_baseline: number;
+      unsupported_flip: boolean;
+      result: string;
+    }>;
   };
   features: Record<string, number>;
   score_caps: string[];

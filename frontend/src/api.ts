@@ -1,4 +1,4 @@
-import type { ProviderKeyView, ProviderMetadata, RunCreate, RunView } from "./types";
+import type { BenchmarkReport, DocumentMatch, DocumentView, ProviderKeyView, ProviderMetadata, RunCreate, RunView } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -52,6 +52,39 @@ export async function getRuns(): Promise<RunView[]> {
 
 export async function getRun(runId: string): Promise<RunView> {
   return request<RunView>(`/api/runs/${runId}`);
+}
+
+export async function getDocuments(): Promise<DocumentView[]> {
+  const data = await request<{ documents: DocumentView[] }>("/api/documents");
+  return data.documents;
+}
+
+export async function uploadDocument(payload: {
+  title: string;
+  text: string;
+  source_url?: string | null;
+  source_type?: string;
+}): Promise<DocumentView> {
+  return request<DocumentView>("/api/documents", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchSourceUrl(url: string): Promise<DocumentView> {
+  return request<DocumentView>("/api/documents/fetch", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+}
+
+export async function searchDocuments(q: string): Promise<DocumentMatch[]> {
+  const data = await request<{ matches: DocumentMatch[] }>(`/api/documents/search?q=${encodeURIComponent(q)}`);
+  return data.matches;
+}
+
+export async function getBenchmarkReport(): Promise<BenchmarkReport> {
+  return request<BenchmarkReport>("/api/benchmarks/report");
 }
 
 export function exportUrl(runId: string): string {

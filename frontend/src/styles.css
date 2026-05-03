@@ -493,6 +493,11 @@ label {
   margin: 12px 0 0;
 }
 
+.source-list.compact {
+  max-height: 360px;
+  overflow: auto;
+}
+
 .key-row,
 .source-row {
   background: var(--surface-soft);
@@ -517,6 +522,33 @@ label {
 
 .source-row p {
   margin: 8px 0 0;
+}
+
+.source-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.source-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.08fr) minmax(300px, 0.72fr);
+}
+
+.source-form {
+  display: grid;
+  gap: 10px;
+}
+
+.source-form textarea {
+  min-height: 210px;
+}
+
+.inline-search {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  margin-bottom: 10px;
 }
 
 .progress-bar {
@@ -774,6 +806,10 @@ th {
   margin-top: 4px;
 }
 
+.table-card {
+  grid-column: span 2;
+}
+
 .wide {
   grid-column: 1 / -1;
 }
@@ -812,6 +848,7 @@ th {
 
   .upper-grid,
   .settings-grid,
+  .source-grid,
   .answer-grid,
   .split-columns,
   .benchmark-grid {
@@ -834,6 +871,7 @@ th {
   .header-actions,
   .advanced-grid,
   .inline-form,
+  .inline-search,
   .main-nav {
     grid-template-columns: 1fr;
   }

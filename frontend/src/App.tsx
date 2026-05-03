@@ -3,12 +3,17 @@ import { createRoot } from "react-dom/client";
 import {
   createRun,
   deleteKey,
+  fetchSourceUrl,
+  getBenchmarkReport,
+  getDocuments,
   getKeys,
   getProviders,
   getRun,
   getRuns,
   runEventSource,
   saveKey,
+  searchDocuments,
+  uploadDocument,
 } from "./api";
 import {
   KeyManager,
@@ -17,7 +22,17 @@ import {
   TracePanel,
 } from "./components";
 import { Report, type ReportTab, TABS } from "./report";
-import type { ProviderKeyView, ProviderMetadata, ReliabilityGraph, RunCreate, RunView, StreamEvent } from "./types";
+import type {
+  BenchmarkReport,
+  DocumentMatch,
+  DocumentView,
+  ProviderKeyView,
+  ProviderMetadata,
+  ReliabilityGraph,
+  RunCreate,
+  RunView,
+  StreamEvent,
+} from "./types";
 import "./styles.css";
 
 type WorkspaceView = "workbench" | "runs" | "sources" | "benchmarks" | "settings";
@@ -35,6 +50,8 @@ function App() {
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [keys, setKeys] = useState<ProviderKeyView[]>([]);
   const [runs, setRuns] = useState<RunView[]>([]);
+  const [documents, setDocuments] = useState<DocumentView[]>([]);
+  const [benchmarkReport, setBenchmarkReport] = useState<BenchmarkReport | null>(null);
   const [form, setForm] = useState<RunCreate>(initialRunForm);
   const [keyProvider, setKeyProvider] = useState("tinker");
   const [keyValue, setKeyValue] = useState("");
@@ -59,10 +76,18 @@ function App() {
   }, [events, graph]);
 
   async function refresh() {
-    const [nextProviders, nextKeys, nextRuns] = await Promise.all([getProviders(), getKeys(), getRuns()]);
+    const [nextProviders, nextKeys, nextRuns, nextDocuments, nextBenchmarkReport] = await Promise.all([
+      getProviders(),
+      getKeys(),
+      getRuns(),
+      getDocuments(),
+      getBenchmarkReport(),
+    ]);
     setProviders(nextProviders.map(normalizeProvider));
     setKeys(nextKeys);
     setRuns(nextRuns);
+    setDocuments(nextDocuments);
+    setBenchmarkReport(nextBenchmarkReport);
   }
 
   async function handleSaveKey(event: FormEvent) {
@@ -153,6 +178,30 @@ function App() {
     }
   }
 
+  async function handleUploadDocument(payload: { title: string; text: string; source_url?: string | null }) {
+    setError(null);
+    try {
+      await uploadDocument({ ...payload, source_type: payload.source_url ? "manual_source" : "uploaded_document" });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to upload document");
+    }
+  }
+
+  async function handleFetchSource(url: string) {
+    setError(null);
+    try {
+      await fetchSourceUrl(url);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch source");
+    }
+  }
+
+  async function handleSearchDocuments(query: string): Promise<DocumentMatch[]> {
+    return searchDocuments(query);
+  }
+
   return (
     <div className="workspace-shell">
       <aside className="sidebar">
@@ -214,9 +263,17 @@ function App() {
 
           {view === "runs" && <RunsPage runs={runs} activeRunId={activeRunId} onSelect={handleSelectRun} />}
 
-          {view === "sources" && <SourcesPage graph={graph} />}
+          {view === "sources" && (
+            <SourcesPage
+              graph={graph}
+              documents={documents}
+              onFetchSource={handleFetchSource}
+              onSearch={handleSearchDocuments}
+              onUploadDocument={handleUploadDocument}
+            />
+          )}
 
-          {view === "benchmarks" && <BenchmarksPage graph={graph} />}
+          {view === "benchmarks" && <BenchmarksPage graph={graph} report={benchmarkReport} />}
 
           {view === "settings" && (
             <SettingsPage
@@ -261,51 +318,201 @@ function RunsPage({
   );
 }
 
-function SourcesPage({ graph }: { graph: ReliabilityGraph | null }) {
+function SourcesPage({
+  graph,
+  documents,
+  onFetchSource,
+  onSearch,
+  onUploadDocument,
+}: {
+  graph: ReliabilityGraph | null;
+  documents: DocumentView[];
+  onFetchSource: (url: string) => Promise<void>;
+  onSearch: (query: string) => Promise<DocumentMatch[]>;
+  onUploadDocument: (payload: { title: string; text: string; source_url?: string | null }) => Promise<void>;
+}) {
   const evidence = graph?.evidence ?? [];
+  const [title, setTitle] = useState("");
+  const [text, setText] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [matches, setMatches] = useState<DocumentMatch[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function submitDocument(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    await onUploadDocument({ title: title || "Untitled document", text, source_url: sourceUrl || null });
+    setTitle("");
+    setText("");
+    setSourceUrl("");
+    setBusy(false);
+  }
+
+  async function fetchUrl() {
+    if (!sourceUrl.trim()) return;
+    setBusy(true);
+    await onFetchSource(sourceUrl.trim());
+    setSourceUrl("");
+    setBusy(false);
+  }
+
+  async function runSearch(event: FormEvent) {
+    event.preventDefault();
+    if (!searchQuery.trim()) return;
+    setMatches(await onSearch(searchQuery.trim()));
+  }
+
+  function handleFile(file: File | null) {
+    if (!file) return;
+    setTitle(file.name);
+    void file.text().then(setText);
+  }
+
   return (
-    <section className="page-panel">
-      <div className="page-copy">
-        <h3>Source Coverage</h3>
-        <p>Evidence appears here after an audit attaches sources to claims.</p>
+    <section className="page-panel source-workspace">
+      <div className="page-copy wide">
+        <h3>Sources</h3>
+        <p>Add documents or source URLs before a run. The backend chunks them, builds local retrieval vectors, and matches claims to the most relevant chunks.</p>
       </div>
-      {evidence.length === 0 ? (
-        <div className="empty-state">No source-backed evidence has been collected yet.</div>
-      ) : (
+      <div className="source-grid">
+        <form className="panel source-form" onSubmit={submitDocument}>
+          <div className="section-heading">
+            <h2>Add document</h2>
+            <p>Paste text or choose a local text file.</p>
+          </div>
+          <input value={title} placeholder="Title" onChange={(event) => setTitle(event.target.value)} />
+          <input value={sourceUrl} placeholder="Optional source URL" onChange={(event) => setSourceUrl(event.target.value)} />
+          <input type="file" accept=".txt,.md,.csv,.json,.log" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
+          <textarea value={text} placeholder="Paste source text" onChange={(event) => setText(event.target.value)} />
+          <div className="run-action-row">
+            <button className="primary-action" disabled={busy || text.trim().length < 20} type="submit">
+              Add source
+            </button>
+            <button className="ghost-button" disabled={busy || !sourceUrl.trim()} type="button" onClick={() => void fetchUrl()}>
+              Fetch URL
+            </button>
+          </div>
+        </form>
+        <div className="panel">
+          <div className="section-heading">
+            <h2>Library</h2>
+            <p>{documents.length} sources available for retrieval.</p>
+          </div>
+          <form className="inline-search" onSubmit={runSearch}>
+            <input value={searchQuery} placeholder="Search source chunks" onChange={(event) => setSearchQuery(event.target.value)} />
+            <button type="submit">Search</button>
+          </form>
+          <div className="source-list compact">
+            {documents.length === 0 ? (
+              <p className="empty">No sources added yet.</p>
+            ) : (
+              documents.map((document) => (
+                <article className="source-row" key={document.document_id}>
+                  <strong>{document.title}</strong>
+                  <span>{document.source_type} · {document.chunk_count} chunks</span>
+                </article>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+      {matches.length > 0 && (
         <div className="source-list">
-          {evidence.map((item) => (
+          {matches.map((match) => (
+            <article className="source-row" key={match.chunk_id}>
+              <strong>{match.title}</strong>
+              <span>{match.source_type} · relevance {Math.round(match.relevance_score * 100)}%</span>
+              <p>{match.text}</p>
+            </article>
+          ))}
+        </div>
+      )}
+      <div className="source-list">
+        {evidence.length === 0 ? (
+          <div className="empty-state">No source-backed evidence has been collected for the selected run yet.</div>
+        ) : (
+          evidence.map((item) => (
             <article className="source-row" key={item.evidence_id}>
               <strong>{item.source_title}</strong>
               <span>{item.source_type} · {item.source_quality}</span>
               <p>{item.snippet}</p>
             </article>
-          ))}
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function BenchmarksPage({ graph, report }: { graph: ReliabilityGraph | null; report: BenchmarkReport | null }) {
+  return (
+    <section className="page-panel benchmark-grid">
+      <div className="metric-tile">
+        <span>Calibration</span>
+        <strong>{report ? report.status.replaceAll("_", " ") : "Awaiting labeled runs"}</strong>
+      </div>
+      <div className="metric-tile">
+        <span>Labeled runs</span>
+        <strong>{report?.label_count ?? 0}</strong>
+      </div>
+      <div className="metric-tile">
+        <span>ECE</span>
+        <strong>{report?.ece == null ? "Needs labels" : report.ece.toFixed(3)}</strong>
+      </div>
+      <div className="metric-tile">
+        <span>Brier</span>
+        <strong>{report?.brier == null ? "Needs labels" : report.brier.toFixed(3)}</strong>
+      </div>
+      <div className="page-copy wide">
+        <h3>Benchmark Report</h3>
+        <p>{report?.summary ?? "Label completed runs to populate calibration and ablation analysis."}</p>
+      </div>
+      <TableCard title="Calibration Buckets" columns={["Range", "Runs", "Avg score", "Avg label"]} rows={(report?.buckets ?? []).map((bucket) => [
+        bucket.range,
+        String(bucket.count),
+        formatDecimal(bucket.avg_score),
+        formatDecimal(bucket.avg_correctness),
+      ])} />
+      <TableCard title="Ablations" columns={["Signal", "Avg score delta", "Runs"]} rows={(report?.ablations ?? []).map((row) => [
+        row.signal,
+        formatDecimal(row.avg_score_delta),
+        String(row.run_count),
+      ])} />
+    </section>
+  );
+}
+
+function TableCard({ title, columns, rows }: { title: string; columns: string[]; rows: string[][] }) {
+  return (
+    <section className="panel table-card">
+      <div className="section-heading">
+        <h2>{title}</h2>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty">No rows yet.</p>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>{columns.map((column) => <th key={column}>{column}</th>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, cellIndex) => <td key={`${rowIndex}-${cellIndex}`}>{cell}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
   );
 }
 
-function BenchmarksPage({ graph }: { graph: ReliabilityGraph | null }) {
-  return (
-    <section className="page-panel benchmark-grid">
-      <div className="metric-tile">
-        <span>Calibration</span>
-        <strong>{graph ? graph.answer.calibration_status.replaceAll("_", " ") : "Awaiting labeled runs"}</strong>
-      </div>
-      <div className="metric-tile">
-        <span>Trace completeness</span>
-        <strong>{graph ? `${Math.round((graph.features.trace_completeness ?? 0) * 100)}%` : "No audit selected"}</strong>
-      </div>
-      <div className="page-copy wide">
-        <h3>Benchmark Report</h3>
-        <p>
-          Calibration curves, risk coverage, ablations, and user labels will populate this research view as audited answers
-          accumulate. Until then, scores remain diagnostic.
-        </p>
-      </div>
-    </section>
-  );
+function formatDecimal(value: number): string {
+  return Number.isFinite(value) ? value.toFixed(3) : "0.000";
 }
 
 function SettingsPage(props: {

@@ -66,6 +66,35 @@ class RunLabelCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=4000)
 
 
+class DocumentCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    text: str = Field(min_length=20, max_length=1_000_000)
+    source_url: Optional[str] = Field(default=None, max_length=2000)
+    source_type: str = Field(default="uploaded_document", max_length=80)
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value.strip() == "":
+            return None
+        url = value.strip()
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("source_url must be http or https")
+        return url
+
+
+class SourceFetchCreate(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        url = value.strip()
+        if not url.startswith(("http://", "https://")):
+            raise ValueError("url must be http or https")
+        return url
+
+
 class ProviderMetadata(BaseModel):
     provider: str
     label: str

@@ -2,11 +2,12 @@ import asyncio
 import json
 
 from backend.reliability_graph.pipeline import ReliabilityPipeline
+from backend.reliability_graph.retrieval import build_chunks
 
 
-def run_pipeline(run):
+def run_pipeline(run, retrieval_chunks=None):
     async def execute():
-        pipeline = ReliabilityPipeline()
+        pipeline = ReliabilityPipeline(retrieval_chunks=retrieval_chunks)
 
         async def resolver(_provider):
             return None
@@ -66,7 +67,28 @@ def test_pipeline_marks_closed_model_causal_probe_unavailable():
     assert graph["causal_probe"]["mode"] == "not_available"
 
 
-def test_pipeline_exposes_tinker_causal_probe_only_when_configured():
+def test_pipeline_uses_document_evidence_for_claim_matching():
+    chunks = [
+        {
+            **chunk,
+            "chunk_id": "chunk_1",
+            "document_id": "doc_1",
+            "title": "Answer Reliability Guide",
+            "source_url": None,
+            "source_type": "uploaded_document",
+        }
+        for chunk in build_chunks(
+            "The best provisional answer is to proceed only if the decision can be decomposed into claims, assumptions, risks, and reversible next steps. "
+            "The main reliability need is evidence, not confidence language."
+        )
+    ]
+    graph = run_pipeline(base_run(), retrieval_chunks=chunks)[-1]["graph"]
+
+    assert any(item["source_type"] == "uploaded_document" for item in graph["evidence"])
+    assert any(assessment["status"] in {"supported", "partially_supported"} for assessment in graph["claim_assessments"])
+
+
+def test_pipeline_requires_tinker_key_for_perturbation_probe():
     events = run_pipeline(
         base_run(
             provider="tinker",
@@ -76,5 +98,5 @@ def test_pipeline_exposes_tinker_causal_probe_only_when_configured():
     )
     graph = events[-1]["graph"]
 
-    assert graph["causal_probe"]["available"] is True
-    assert graph["causal_probe"]["mode"] == "configured_not_run"
+    assert graph["causal_probe"]["available"] is False
+    assert graph["causal_probe"]["mode"] == "missing_key"

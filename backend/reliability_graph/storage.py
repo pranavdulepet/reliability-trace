@@ -1,3 +1,4 @@
+import hashlib
 import json
 import secrets
 import sqlite3
@@ -58,6 +59,30 @@ class Storage:
                   notes text,
                   created_at text not null
                 );
+
+                create table if not exists documents (
+                  document_id text primary key,
+                  user_id text not null,
+                  title text not null,
+                  source_url text,
+                  source_type text not null,
+                  content_sha256 text not null,
+                  created_at text not null
+                );
+
+                create table if not exists document_chunks (
+                  chunk_id text primary key,
+                  document_id text not null,
+                  user_id text not null,
+                  chunk_index integer not null,
+                  text text not null,
+                  embedding_json text not null,
+                  token_count integer not null,
+                  created_at text not null
+                );
+
+                create index if not exists document_chunks_user_idx
+                  on document_chunks(user_id, document_id);
                 """
             )
 
@@ -264,6 +289,117 @@ class Storage:
             "notes": notes,
             "created_at": now,
         }
+
+    def save_document(
+        self,
+        user_id: str,
+        title: str,
+        text: str,
+        source_url: Optional[str],
+        source_type: str,
+        chunks: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        document_id = "doc_" + secrets.token_urlsafe(10)
+        now = utcnow()
+        content_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        with self._connect() as con:
+            con.execute(
+                """
+                insert into documents
+                  (document_id, user_id, title, source_url, source_type, content_sha256, created_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (document_id, user_id, title, source_url, source_type, content_sha, now),
+            )
+            for chunk in chunks:
+                con.execute(
+                    """
+                    insert into document_chunks
+                      (chunk_id, document_id, user_id, chunk_index, text, embedding_json, token_count, created_at)
+                    values (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "chunk_" + secrets.token_urlsafe(10),
+                        document_id,
+                        user_id,
+                        chunk["chunk_index"],
+                        chunk["text"],
+                        chunk["embedding_json"],
+                        chunk["token_count"],
+                        now,
+                    ),
+                )
+        return self.get_document(user_id, document_id)
+
+    def get_document(self, user_id: str, document_id: str) -> Dict[str, Any]:
+        with self._connect() as con:
+            row = con.execute(
+                """
+                select d.document_id, d.title, d.source_url, d.source_type, d.content_sha256, d.created_at,
+                       count(c.chunk_id) as chunk_count
+                from documents d
+                left join document_chunks c on c.document_id = d.document_id and c.user_id = d.user_id
+                where d.user_id = ? and d.document_id = ?
+                group by d.document_id
+                """,
+                (user_id, document_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("document not found")
+        return dict(row)
+
+    def list_documents(self, user_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                select d.document_id, d.title, d.source_url, d.source_type, d.content_sha256, d.created_at,
+                       count(c.chunk_id) as chunk_count
+                from documents d
+                left join document_chunks c on c.document_id = d.document_id and c.user_id = d.user_id
+                where d.user_id = ?
+                group by d.document_id
+                order by d.created_at desc
+                limit 100
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_document_chunks(self, user_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                select c.chunk_id, c.document_id, c.chunk_index, c.text, c.embedding_json, c.token_count,
+                       d.title, d.source_url, d.source_type, d.created_at
+                from document_chunks c
+                join documents d on d.document_id = c.document_id and d.user_id = c.user_id
+                where c.user_id = ?
+                order by d.created_at desc, c.chunk_index asc
+                limit 2000
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_labeled_runs(self, user_id: str) -> List[Dict[str, Any]]:
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                select r.run_id, r.graph_json, l.usefulness, l.correctness, l.created_at as label_created_at
+                from labels l
+                join runs r on r.run_id = l.run_id and r.user_id = l.user_id
+                where l.user_id = ? and r.status = 'completed' and r.graph_json is not null
+                order by l.created_at desc
+                limit 500
+                """,
+                (user_id,),
+            ).fetchall()
+        results = []
+        for row in rows:
+            data = dict(row)
+            data["graph"] = json.loads(data.pop("graph_json"))
+            results.append(data)
+        return results
 
     def _connect(self) -> sqlite3.Connection:
         con = sqlite3.connect(str(self.db_path))

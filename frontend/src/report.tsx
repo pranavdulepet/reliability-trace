@@ -10,7 +10,7 @@ export const TABS = [
   "Disagreement",
   "Checks",
   "Calibration",
-  "Causal Probe",
+  "Tinker Probe",
   "Export",
 ] as const;
 
@@ -68,7 +68,7 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Disagreement") return <DisagreementTab graph={graph} />;
   if (tab === "Checks") return <StressTab graph={graph} />;
   if (tab === "Calibration") return <CalibrationTab graph={graph} />;
-  if (tab === "Causal Probe") return <CausalProbeTab graph={graph} />;
+  if (tab === "Tinker Probe") return <CausalProbeTab graph={graph} />;
   return <ExportTab graph={graph} />;
 }
 
@@ -252,7 +252,20 @@ function CausalProbeTab({ graph }: { graph: ReliabilityGraph }) {
     <div>
       <h3>{formatStatus(graph.causal_probe.mode)}</h3>
       <p>{graph.causal_probe.reason}</p>
-      <Table columns={["Operation"]} rows={graph.causal_probe.operations.map((operation) => [operation])} />
+      {graph.causal_probe.results.length > 0 ? (
+        <Table
+          columns={["Operation", "Changed", "Similarity", "Unsupported flip", "Result"]}
+          rows={graph.causal_probe.results.map((result) => [
+            result.operation,
+            result.answer_changed ? "yes" : "no",
+            formatNumber(result.similarity_to_baseline),
+            result.unsupported_flip ? "yes" : "no",
+            result.result,
+          ])}
+        />
+      ) : (
+        <Table columns={["Available operation"]} rows={graph.causal_probe.operations.map((operation) => [operation])} />
+      )}
     </div>
   );
 }
