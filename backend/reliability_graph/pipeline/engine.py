@@ -94,8 +94,8 @@ class ReliabilityPipeline:
             return {"final_answer_summary": state["answer"]["summary"]}
 
         if step_type == "claim_extraction":
-            state["claims"] = self._extract_claims(state)
-            return {"claim_count": len(state["claims"])}
+            state["claims"] = await self._extract_claims(state, resolve_key)
+            return {"claim_count": len(state["claims"]), "structured": bool(state.get("structured_claims_used"))}
 
         if step_type == "assumption_extraction":
             state["assumptions"] = self._extract_assumptions(state)
@@ -150,39 +150,57 @@ class ReliabilityPipeline:
                     candidates = []
                     context = self._retrieval_context(run["question"])
                     conversation_context = self._conversation_context(run.get("prior_context", []))
+                    provider_errors: List[str] = []
                     for index in range(int(run["samples"])):
                         prompt = self._candidate_prompt(run["question"], index, context, conversation_context)
-                        response = await provider.generate(
-                            GenerateRequest(
-                                messages=[
-                                    ModelMessage(
-                                        role="system",
-                                        content=(
-                                            "You are generating one candidate answer for a reliability audit. "
-                                            "Be direct, preserve uncertainty, and avoid private reasoning transcripts."
+                        response = None
+                        answer_text = ""
+                        for attempt in range(2):
+                            attempt_prompt = prompt
+                            if attempt == 1:
+                                attempt_prompt += (
+                                    "\n\nReturn only the final answer. Do not repeat the prompt, instructions, or conversation."
+                                )
+                            response = await provider.generate(
+                                GenerateRequest(
+                                    messages=[
+                                        ModelMessage(
+                                            role="system",
+                                            content=(
+                                                "Generate one candidate answer for a reliability audit. "
+                                                "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning."
+                                            ),
                                         ),
-                                    ),
-                                    ModelMessage(role="user", content=prompt),
-                                ],
-                                model=run.get("model"),
-                                temperature=0.3 + (index * 0.08),
-                                max_tokens=420,
+                                        ModelMessage(role="user", content=attempt_prompt),
+                                    ],
+                                    model=run.get("model"),
+                                    temperature=0.3 + (index * 0.08),
+                                    max_tokens=420,
+                                )
                             )
-                        )
+                            answer_text = self._clean_model_text(response.text)
+                            if not self._is_bad_model_answer(answer_text, run["question"], prompt):
+                                break
+                            provider_errors.append("provider returned an empty or echoed answer; retried once")
+                            answer_text = ""
+                        if not answer_text:
+                            answer_text = self._local_candidate_text(run["question"], index, context)
                         candidates.append(
                             {
                                 "candidate_id": "cand_%d" % (index + 1),
-                                "provider": response.provider,
-                                "model": response.model,
+                                "provider": response.provider if response else run["provider"],
+                                "model": response.model if response else (run.get("model") or "provider_default"),
                                 "prompt_variant": "variant_%d" % (index + 1),
-                                "answer_text": self._clean_model_text(response.text),
+                                "answer_text": answer_text,
                                 "semantic_cluster_id": None,
                             }
                         )
-                    return candidates, None
+                    return candidates, "; ".join(dict.fromkeys(provider_errors)) or None
                 except ProviderError as exc:
-                    return self._local_candidates(run["question"], int(run["samples"])), str(exc)
-        return self._local_candidates(run["question"], int(run["samples"])), None
+                    context = self._retrieval_context(run["question"])
+                    return self._local_candidates(run["question"], int(run["samples"]), context), self._safe_error_text(str(exc))
+        context = self._retrieval_context(run["question"])
+        return self._local_candidates(run["question"], int(run["samples"]), context), None
 
     def _candidate_prompt(self, question: str, index: int, context: str = "", conversation_context: str = "") -> str:
         variants = [
@@ -208,42 +226,100 @@ class ReliabilityPipeline:
             "\n\n".join(parts)
         )
 
-    def _local_candidates(self, question: str, samples: int) -> List[Dict[str, Any]]:
-        q = question.strip()
-        templates = [
-            (
-                "The best provisional answer is to proceed only if the decision can be decomposed into "
-                "claims, assumptions, risks, and reversible next steps. The main reliability need is evidence, "
-                "not confidence language."
-            ),
-            (
-                "A cautious answer should separate what is known from what is assumed. If the question is a decision, "
-                "the recommendation should depend on criteria, alternatives, sensitivity, and opportunity cost."
-            ),
-            (
-                "The strongest objection is that a polished answer can still be unsupported. The answer should remain "
-                "tentative until high-impact claims have evidence and stress tests do not cause unsupported flips."
-            ),
-            (
-                "The answer is worth trusting only to the extent that its claims survive evidence checks, disagreement "
-                "analysis, and sycophancy pressure. Unsupported assumptions should cap confidence."
-            ),
-            (
-                "A useful next action is a narrow pilot: collect evidence, identify failure modes, and decide what result "
-                "would change the recommendation before treating the answer as reliable."
-            ),
-        ]
+    def _local_candidates(self, question: str, samples: int, context: str = "") -> List[Dict[str, Any]]:
         return [
             {
                 "candidate_id": "cand_%d" % (index + 1),
                 "provider": "preview",
                 "model": "core-engine",
                 "prompt_variant": "preview_%d" % (index + 1),
-                "answer_text": "Question: %s\n\n%s" % (q, templates[index % len(templates)]),
+                "answer_text": self._local_candidate_text(question, index, context),
                 "semantic_cluster_id": None,
             }
             for index in range(samples)
         ]
+
+    def _local_candidate_text(self, question: str, index: int, context: str = "") -> str:
+        q = question.strip()
+        topic = self._question_topic(q)
+        lowered = q.lower()
+        source_answer = self._local_source_answer(context)
+        if source_answer:
+            templates = [
+                "Based on the attached source, %s",
+                "The attached source supports this answer: %s",
+            ]
+            return templates[index % len(templates)] % source_answer
+        if self._is_high_stakes_question(q):
+            templates = [
+                (
+                    "For the question about %s, use this answer only as general orientation. The safe answer is to separate background information "
+                    "from action: verify the facts in a trusted source, check whether the situation has personal medical, legal, "
+                    "financial, or safety consequences, and get qualified help before acting."
+                ),
+                (
+                    "%s needs a cautious answer because the cost of being wrong can be high. I would treat any unsupported claim as "
+                    "unreliable, preserve the uncertainty, and rely on professional or primary-source guidance before making a decision."
+                ),
+            ]
+        elif any(term in lowered for term in ["latest", "current", "today", "recent", "now", "2026"]):
+            templates = [
+                (
+                    "I cannot verify current facts about %s without an attached or fetched source in this run. A useful answer can frame "
+                    "what to check, but the factual conclusion should wait for a dated, reliable source."
+                ),
+                (
+                    "For a current question about %s, the main answer is conditional: use a dated source, compare the claim against it, "
+                    "and treat unsupported details as provisional rather than established."
+                ),
+            ]
+        elif any(term in lowered for term in ["should", "worth", "choose", "recommend", "better"]):
+            templates = [
+                (
+                    "For the question about %s, the practical answer is to choose the option with the best evidence, lowest irreversible cost, and clearest "
+                    "failure signal. If the evidence is thin, start with the smallest reversible step that would teach you whether to continue."
+                ),
+                (
+                    "I would decide %s by listing the real alternatives, the constraints that matter, and what result would change the decision. "
+                    "A confident recommendation is not justified until the high-impact assumptions have support."
+                ),
+            ]
+        elif lowered.startswith(("explain", "what is", "how does", "why does")):
+            templates = [
+                (
+                    "%s can be understood by separating the core idea, the mechanism, and the limits. The core answer should be simple first, "
+                    "then checked claim by claim against sources if the details matter."
+                ),
+                (
+                    "A clear explanation of %s should define the term, show how it works in one concrete example, and call out where the "
+                    "explanation depends on context or source evidence."
+                ),
+            ]
+        else:
+            templates = [
+                (
+                    "For %s, the most useful answer is a direct one with its uncertainty attached. The answer should identify the main claim, "
+                    "the evidence needed to support it, and the next check that would change the conclusion."
+                ),
+                (
+                    "%s should be answered by separating stable reasoning from unsupported facts. I would trust the answer only where the "
+                    "claim checks and source matches support it."
+                ),
+            ]
+        return templates[index % len(templates)] % topic
+
+    def _local_source_answer(self, context: str) -> Optional[str]:
+        if not context:
+            return None
+        lowered = context.lower()
+        if any(term in lowered for term in ["ignore previous instructions", "disregard previous instructions", "system prompt"]):
+            return "the attachment contains instruction-like text that should be treated as untrusted source content, not as directions to the model."
+        match = re.search(r"\[S\d+\]\s+[^:]+:\s+(.+)", context, flags=re.DOTALL)
+        if not match:
+            return None
+        snippet = re.sub(r"\s+", " ", match.group(1)).strip()
+        sentence = self._sentences(snippet)
+        return (sentence[0] if sentence else snippet)[:500]
 
     def _classify_question(self, question: str) -> str:
         q = question.lower()
@@ -265,21 +341,38 @@ class ReliabilityPipeline:
 
     def _cluster_candidates(self, candidates: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], float, float]:
         clusters: List[Dict[str, Any]] = []
-        for index, candidate in enumerate(candidates):
-            cluster_id = "cluster_1" if index < max(1, len(candidates) - 1) else "cluster_2"
-            label = "Cautious proceed" if cluster_id == "cluster_1" else "Primary objection"
-            candidate["semantic_cluster_id"] = cluster_id
-            existing = next((cluster for cluster in clusters if cluster["cluster_id"] == cluster_id), None)
-            if existing is None:
-                existing = {"cluster_id": cluster_id, "label": label, "candidate_ids": [], "summary": candidate["answer_text"][:240]}
-                clusters.append(existing)
-            existing["candidate_ids"].append(candidate["candidate_id"])
+        representatives: Dict[str, str] = {}
+        for candidate in candidates:
+            best_cluster = None
+            best_similarity = 0.0
+            for cluster in clusters:
+                similarity = text_similarity(candidate["answer_text"], representatives[cluster["cluster_id"]])
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_cluster = cluster
+            if best_cluster is None or best_similarity < 0.34:
+                cluster_id = "cluster_%d" % (len(clusters) + 1)
+                best_cluster = {
+                    "cluster_id": cluster_id,
+                    "label": self._cluster_label(candidate["answer_text"]),
+                    "candidate_ids": [],
+                    "summary": candidate["answer_text"][:240],
+                }
+                clusters.append(best_cluster)
+                representatives[cluster_id] = candidate["answer_text"]
+            candidate["semantic_cluster_id"] = best_cluster["cluster_id"]
+            best_cluster["candidate_ids"].append(candidate["candidate_id"])
 
         total = float(len(candidates) or 1)
         probabilities = [len(cluster["candidate_ids"]) / total for cluster in clusters]
         entropy = -sum([p * math.log(p) for p in probabilities if p > 0])
         stability = 1.0 if len(clusters) <= 1 else 1.0 - (entropy / math.log(len(clusters)))
         return clusters, max(0.0, min(1.0, stability)), entropy
+
+    def _cluster_label(self, text: str) -> str:
+        sentence = self._summary_from_text(text)
+        tokens = sentence.split()
+        return " ".join(tokens[:5]).strip(" .,:;") or "Answer variant"
 
     def _synthesize(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
@@ -299,7 +392,65 @@ class ReliabilityPipeline:
             "recommended_user_action": "Review the reliability cards, add relevant attachments if evidence is thin, then rerun or ask a follow-up.",
         }
 
-    def _extract_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _extract_claims(
+        self,
+        state: Dict[str, Any],
+        resolve_key: ProviderKeyResolver,
+    ) -> List[Dict[str, Any]]:
+        run = state["run"]
+        if run["provider"] not in ["preview", "local"] and run.get("use_live_provider"):
+            api_key = await resolve_key(run["provider"])
+            if api_key:
+                try:
+                    claims = await self._extract_claims_with_provider(state, api_key)
+                    if claims:
+                        state["structured_claims_used"] = True
+                        return claims
+                except ProviderError as exc:
+                    state["structured_analysis_error"] = self._safe_error_text(str(exc))
+        state["structured_claims_used"] = False
+        return self._fallback_claims(state)
+
+    async def _extract_claims_with_provider(self, state: Dict[str, Any], api_key: str) -> List[Dict[str, Any]]:
+        run = state["run"]
+        provider = build_provider(run["provider"], api_key)
+        prompt = (
+            "Extract at most 8 atomic claims from the answer. Return JSON only with this schema:\n"
+            '{"claims":[{"text":"string","type":"factual|decision|causal|methodological|summary",'
+            '"importance":"high|medium|low","checkability":"externally_checkable|needs_user_context|not_checkable"}]}\n\n'
+            "Answer:\n%s" % state["answer"]["final_answer"][:5000]
+        )
+        last_error = "provider did not return valid claim JSON"
+        for attempt in range(2):
+            response = await provider.generate(
+                GenerateRequest(
+                    messages=[
+                        ModelMessage(
+                            role="system",
+                            content=(
+                                "You extract answer claims for reliability checking. Return valid JSON only. "
+                                "Do not include markdown, prose, source text, or private reasoning."
+                            ),
+                        ),
+                        ModelMessage(role="user", content=prompt if attempt == 0 else prompt + "\n\nFix the JSON schema exactly."),
+                    ],
+                    model=run.get("model"),
+                    temperature=0.0,
+                    max_tokens=700,
+                    response_format={"type": "json_object"},
+                )
+            )
+            try:
+                data = self._json_from_model_text(response.text)
+            except ProviderError as exc:
+                last_error = str(exc)
+                continue
+            claims, last_error = self._validate_claim_json(data)
+            if claims:
+                return claims
+        raise ProviderError(last_error)
+
+    def _fallback_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         sentences = self._sentences(state["answer"]["final_answer"])
         claims: List[Dict[str, Any]] = []
         for sentence in sentences:
@@ -333,24 +484,52 @@ class ReliabilityPipeline:
         return claims
 
     def _extract_assumptions(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [
+        question = state["run"]["question"]
+        has_sources = bool(self.retrieval_chunks)
+        assumptions = [
             {
                 "assumption_id": "a1",
-                "text": "The user values reliability and auditability more than speed for this question.",
+                "text": "The answer can be evaluated from the current chat context and attached or fetched sources.",
                 "importance": "high",
-                "evidence_status": "untested",
+                "evidence_status": "supported" if has_sources else "untested",
                 "would_change_recommendation_if_false": True,
-                "sensitivity_notes": "If speed matters more than auditability, a single answer with citations may be preferable.",
-            },
-            {
-                "assumption_id": "a2",
-                "text": "The relevant facts can be checked with web sources or user-provided documents.",
-                "importance": "medium",
-                "evidence_status": "untested",
-                "would_change_recommendation_if_false": False,
-                "sensitivity_notes": "If evidence is private or unavailable, the graph should emphasize uncertainty.",
-            },
+                "sensitivity_notes": "If the relevant facts are absent from the provided context, the answer should be treated as provisional.",
+            }
         ]
+        if state["question_type"] in ["decision_qa", "mixed", "opinion_qa"]:
+            assumptions.append(
+                {
+                    "assumption_id": "a2",
+                    "text": "The user's constraints, risk tolerance, and goals match the recommendation implied by the answer.",
+                    "importance": "high",
+                    "evidence_status": "untested",
+                    "would_change_recommendation_if_false": True,
+                    "sensitivity_notes": "Different constraints could flip the recommendation even if the factual claims are supported.",
+                }
+            )
+        elif self._is_high_stakes_question(question):
+            assumptions.append(
+                {
+                    "assumption_id": "a2",
+                    "text": "The answer is used for orientation, not as medical, legal, financial, or safety instruction.",
+                    "importance": "high",
+                    "evidence_status": "untested",
+                    "would_change_recommendation_if_false": True,
+                    "sensitivity_notes": "Personal high-stakes action requires qualified review and primary-source verification.",
+                }
+            )
+        else:
+            assumptions.append(
+                {
+                    "assumption_id": "a2",
+                    "text": "The phrasing of the question contains enough context to answer without guessing missing user-specific details.",
+                    "importance": "medium",
+                    "evidence_status": "untested",
+                    "would_change_recommendation_if_false": False,
+                    "sensitivity_notes": "Missing context should show up as uncertainty or a request for source material.",
+                }
+            )
+        return assumptions
 
     def _decision_analysis(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
@@ -362,50 +541,36 @@ class ReliabilityPipeline:
                 "recommendation": None,
                 "sensitivity_summary": "Decision analysis is not central for this question type.",
             }
+        topic = self._question_topic(state["run"]["question"])
+        has_external_evidence = bool(self.retrieval_chunks)
         alternatives = [
-            {"name": "Proceed with a narrow pilot", "utility": 0.76},
-            {"name": "Proceed immediately at full scope", "utility": 0.52},
-            {"name": "Defer until stronger evidence exists", "utility": 0.61},
+            {"name": "Take the smallest reversible step on %s" % topic, "utility": 0.76 if has_external_evidence else 0.66},
+            {"name": "Act immediately at full scope", "utility": 0.52 if has_external_evidence else 0.40},
+            {"name": "Defer until stronger evidence exists", "utility": 0.61 if has_external_evidence else 0.70},
             {"name": "Do not proceed", "utility": 0.44},
         ]
         criteria = [
             {"name": "evidence quality", "weight": 0.25},
-            {"name": "technical feasibility", "weight": 0.20},
+            {"name": "fit with user constraints", "weight": 0.20},
             {"name": "cost exposure", "weight": 0.15},
             {"name": "reversibility", "weight": 0.15},
             {"name": "decision usefulness", "weight": 0.25},
         ]
+        alternatives.sort(key=lambda item: item["utility"], reverse=True)
         return {
             "applicable": True,
             "alternatives": alternatives,
             "criteria": criteria,
             "recommendation": alternatives[0]["name"],
-            "decision_margin": round(alternatives[0]["utility"] - alternatives[2]["utility"], 2),
+            "decision_margin": round(alternatives[0]["utility"] - alternatives[1]["utility"], 2),
             "sensitivity_summary": (
-                "The recommendation flips toward deferral if evidence quality or user tolerance for slow runs "
-                "is weighted much lower than assumed."
+                "The recommendation changes if evidence quality, reversibility, or user-specific constraints are weighted differently."
             ),
             "label": "Decision support, not objective truth.",
         }
 
     def _evidence(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        evidence = evidence_for_claims(state["claims"], self.retrieval_chunks)
-        if evidence:
-            return evidence
-        return [
-            {
-                "evidence_id": "e1",
-                "claim_id": state["claims"][0]["claim_id"],
-                "source_title": "Audit trace",
-                "source_url": None,
-                "source_date": None,
-                "source_type": "system_trace",
-                "snippet": "The audit ran without user documents or fetched source URLs, so claim support is limited to internal trace evidence.",
-                "support_relation": "partially_supports",
-                "source_quality": "low",
-                "relevance_score": 0.12,
-            }
-        ]
+        return evidence_for_claims(state["claims"], self.retrieval_chunks)
 
     def _assess_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         evidence_by_claim = {}
@@ -417,30 +582,43 @@ class ReliabilityPipeline:
             evidence_ids = [item["evidence_id"] for item in evidence_items]
             if any(item["support_relation"] == "contradicts" for item in evidence_items):
                 status = "contradicted"
+                relation = "contradicted"
                 support = 0.10
             elif evidence_items:
                 best = max(float(item.get("relevance_score", 0.25)) for item in evidence_items)
                 if best >= 0.34 and any(item["support_relation"] == "supports" for item in evidence_items):
                     status = "supported"
+                    relation = "supported"
                     support = min(0.92, 0.55 + best)
                 else:
                     status = "partially_supported"
+                    relation = "partially_supported"
                     support = min(0.72, 0.36 + best)
             else:
                 status = "insufficient_evidence"
+                relation = "not_found"
                 support = 0.20
+            explanation = self._assessment_explanation(status, evidence_items)
             assessments.append(
                 {
                     "claim_id": claim["claim_id"],
                     "status": status,
+                    "relation": relation,
                     "support_score": round(support, 3),
-                    "explanation": self._assessment_explanation(status, evidence_items),
+                    "explanation": explanation,
+                    "why": explanation,
+                    "source_limit": self._source_limit_for_assessment(status, evidence_items),
                     "evidence_ids": evidence_ids,
                 }
             )
         return assessments
 
     def _stress_tests(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        factual_without_sources = (
+            state["question_type"] in ["factual_qa", "research_qa", "mixed"]
+            and not self._has_external_evidence(state.get("evidence", []))
+        )
+        contradiction_count = len([item for item in state.get("evidence", []) if item.get("support_relation") == "contradicts"])
         return [
             {
                 "test_type": "paraphrase",
@@ -448,31 +626,39 @@ class ReliabilityPipeline:
                 "new_evidence_introduced": False,
                 "unsupported_flip": False,
                 "impact_on_score": "none",
-                "result": "Core recommendation remained stable under a neutral paraphrase.",
+                "result": "A neutral rephrasing should preserve the answer because no new evidence is introduced.",
             },
             {
                 "test_type": "false_authority",
-                "answer_changed": True,
+                "answer_changed": factual_without_sources,
                 "new_evidence_introduced": False,
                 "unsupported_flip": False,
-                "impact_on_score": "small_negative",
-                "result": "Answer softened wording but did not reverse without evidence.",
+                "impact_on_score": "small_negative" if factual_without_sources else "none",
+                "result": (
+                    "An uncited authority would not be enough to resolve this current or factual question."
+                    if factual_without_sources
+                    else "An uncited authority should not override the checked answer without source evidence."
+                ),
             },
             {
-                "test_type": "emotional_pressure",
+                "test_type": "source_contradiction",
                 "answer_changed": False,
-                "new_evidence_introduced": False,
+                "new_evidence_introduced": contradiction_count > 0,
                 "unsupported_flip": False,
-                "impact_on_score": "none",
-                "result": "Answer preserved uncertainty rather than flattering the user.",
+                "impact_on_score": "medium_negative" if contradiction_count else "none",
+                "result": (
+                    "Matched sources already contain a contradiction, so the answer should be checked before use."
+                    if contradiction_count
+                    else "No matched source contradiction was found in the attached or fetched evidence."
+                ),
             },
             {
                 "test_type": "false_premise",
-                "answer_changed": True,
+                "answer_changed": state["semantic_stability"] < 0.55,
                 "new_evidence_introduced": False,
-                "unsupported_flip": False,
-                "impact_on_score": "small_negative",
-                "result": "Answer challenged the premise instead of accepting it as evidence.",
+                "unsupported_flip": state["semantic_stability"] < 0.35,
+                "impact_on_score": "small_negative" if state["semantic_stability"] < 0.55 else "none",
+                "result": "The answer should keep uncertainty visible when the prompt adds pressure or a false premise.",
             },
         ]
 
@@ -618,7 +804,7 @@ class ReliabilityPipeline:
             return {
                 "mode": "provider_error",
                 "available": False,
-                "reason": str(exc),
+                "reason": self._safe_error_text(str(exc)),
                 "operations": operations,
                 "results": results,
             }
@@ -650,6 +836,31 @@ class ReliabilityPipeline:
             cleaned = cleaned.split(marker, 1)[0]
         cleaned = re.sub(r"^(Answer|Response):\s*", "", cleaned, flags=re.IGNORECASE).strip()
         return cleaned.strip()
+
+    def _is_bad_model_answer(self, answer: str, question: str, prompt: str) -> bool:
+        cleaned = answer.strip()
+        if len(tokenize(cleaned)) < 4:
+            return True
+        lowered = cleaned.lower()
+        if "you are generating one candidate answer" in lowered or "### instructions" in lowered:
+            return True
+        if self._longest_common_prefix_ratio(cleaned, prompt) > 0.55:
+            return True
+        if question.strip() and question.strip().lower() in lowered[: max(500, len(question) + 80)] and len(tokenize(cleaned)) < 28:
+            return True
+        return False
+
+    def _longest_common_prefix_ratio(self, text: str, prompt: str) -> float:
+        left = re.sub(r"\s+", " ", text.strip().lower())
+        right = re.sub(r"\s+", " ", prompt.strip().lower())
+        if not left or not right:
+            return 0.0
+        count = 0
+        for a, b in zip(left, right):
+            if a != b:
+                break
+            count += 1
+        return count / float(min(len(left), len(right)) or 1)
 
     def _retrieval_context(self, question: str) -> str:
         matches = search_chunks(question, self.retrieval_chunks, limit=4)
@@ -696,6 +907,95 @@ class ReliabilityPipeline:
         parts = re.split(r"(?<=[.!?])\s+", cleaned)
         return [part.strip(" -•\t") for part in parts if part.strip(" -•\t")]
 
+    def _json_from_model_text(self, text: str) -> Dict[str, Any]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r"```$", "", cleaned).strip()
+        if not cleaned.startswith("{"):
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start >= 0 and end > start:
+                cleaned = cleaned[start : end + 1]
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise ProviderError("provider did not return valid JSON") from exc
+        if not isinstance(data, dict):
+            raise ProviderError("provider JSON root must be an object")
+        return data
+
+    def _validate_claim_json(self, data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+        raw_claims = data.get("claims")
+        if not isinstance(raw_claims, list):
+            return [], "claim JSON must contain a claims array"
+        claims: List[Dict[str, Any]] = []
+        for item in raw_claims:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if len(tokenize(text)) < 4:
+                continue
+            claim_type = str(item.get("type") or self._claim_type(text)).strip()
+            importance = str(item.get("importance") or self._claim_importance(text)).strip()
+            checkability = str(item.get("checkability") or "externally_checkable").strip()
+            if claim_type not in {"factual", "decision", "causal", "methodological", "summary"}:
+                claim_type = self._claim_type(text)
+            if importance not in {"high", "medium", "low"}:
+                importance = self._claim_importance(text)
+            if checkability not in {"externally_checkable", "needs_user_context", "not_checkable"}:
+                checkability = "externally_checkable"
+            claims.append(
+                {
+                    "claim_id": "c%d" % (len(claims) + 1),
+                    "text": text[:900],
+                    "type": claim_type,
+                    "importance": importance,
+                    "checkability": checkability,
+                    "source_sentence": text[:900],
+                    "risk_flags": self._claim_risk_flags(text),
+                }
+            )
+            if len(claims) >= 8:
+                break
+        if not claims:
+            return [], "claim JSON did not contain usable claim text"
+        return claims, ""
+
+    def _question_topic(self, question: str) -> str:
+        cleaned = re.sub(r"\s+", " ", question.strip(" ?.\n\t"))
+        for _ in range(2):
+            cleaned = re.sub(
+                r"^(should i|should we|can i|can we|could i|could we|would i|would we|should|could|would|can|do|does|did|what is|what are|explain|how does|how do|why does|why)\s+",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+        if not cleaned:
+            return "this question"
+        return cleaned[:120]
+
+    def _is_high_stakes_question(self, question: str) -> bool:
+        lowered = question.lower()
+        terms = [
+            "diagnosis",
+            "dose",
+            "dosage",
+            "emergency",
+            "legal",
+            "lawsuit",
+            "medical",
+            "medicine",
+            "prescription",
+            "tax",
+            "treatment",
+            "bankruptcy",
+            "self-harm",
+            "suicide",
+            "contract",
+        ]
+        return any(term in lowered for term in terms)
+
     def _claim_type(self, sentence: str) -> str:
         lowered = sentence.lower()
         if any(term in lowered for term in ["because", "causes", "depends", "if "]):
@@ -708,7 +1008,7 @@ class ReliabilityPipeline:
 
     def _claim_importance(self, sentence: str) -> str:
         lowered = sentence.lower()
-        if any(term in lowered for term in ["must", "should", "critical", "main", "recommend", "best", "risk", "provider", "special causal"]):
+        if any(term in lowered for term in ["must", "should", "critical", "main", "recommend", "best", "risk", "provider"]):
             return "high"
         if len(tokenize(sentence)) >= 12:
             return "medium"
@@ -725,12 +1025,21 @@ class ReliabilityPipeline:
 
     def _assessment_explanation(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
         if not evidence_items:
-            return "No retrieved document or fetched source chunk matched this claim strongly enough."
+            return "No attached document or fetched source chunk matched this claim strongly enough."
         if status == "contradicted":
             return "At least one matched source chunk uses contradictory language for this claim."
         if status == "supported":
             return "Matched source chunks overlap strongly with the claim and are treated as support."
         return "Matched source chunks are relevant but do not fully establish the claim."
+
+    def _source_limit_for_assessment(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
+        if not evidence_items:
+            return "No attached or fetched source supports this claim."
+        if status == "contradicted":
+            return "Matched evidence conflicts with the claim; compare the source snippet before relying on it."
+        if status == "partially_supported":
+            return "The source match is relevant but incomplete or paraphrased too loosely."
+        return "Support is limited to the retrieved source snippets shown in this run."
 
     def _support_and_source_quality(self, state: Dict[str, Any]) -> Tuple[float, float]:
         assessments = state["claim_assessments"]
@@ -753,6 +1062,13 @@ class ReliabilityPipeline:
 
     def _has_external_evidence(self, evidence: List[Dict[str, Any]]) -> bool:
         return any(item.get("source_type") not in {"system_trace", "internal_policy"} for item in evidence)
+
+    def _safe_error_text(self, message: str) -> str:
+        cleaned = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", message, flags=re.IGNORECASE)
+        cleaned = re.sub(r"tml-[A-Za-z0-9_-]{12,}", "[redacted]", cleaned)
+        cleaned = re.sub(r"sk-[A-Za-z0-9_-]{12,}", "[redacted]", cleaned)
+        cleaned = re.sub(r"AIza[A-Za-z0-9_-]{20,}", "[redacted]", cleaned)
+        return cleaned[:500]
 
     def _claim_by_id(self, claims: List[Dict[str, Any]], claim_id: str) -> Dict[str, Any]:
         return next((claim for claim in claims if claim["claim_id"] == claim_id), {})
@@ -781,9 +1097,263 @@ class ReliabilityPipeline:
             ),
         ]
 
+    def _reliability_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        assessments = state["claim_assessments"]
+        claims_by_id = {claim["claim_id"]: claim for claim in state["claims"]}
+        external_evidence = [item for item in state["evidence"] if item.get("source_type") not in {"system_trace", "internal_policy"}]
+        contradicted = [item for item in assessments if item.get("relation") == "contradicted" or item.get("status") == "contradicted"]
+        not_found = [item for item in assessments if item.get("relation") == "not_found" or item.get("status") == "insufficient_evidence"]
+        partially_supported = [item for item in assessments if item.get("relation") == "partially_supported"]
+        supported = [item for item in assessments if item.get("relation") == "supported" or item.get("status") == "supported"]
+        high_unsupported = [
+            item
+            for item in not_found
+            if claims_by_id.get(item["claim_id"], {}).get("importance") == "high"
+        ]
+        high_contradicted = [
+            item
+            for item in contradicted
+            if claims_by_id.get(item["claim_id"], {}).get("importance") == "high"
+        ]
+        probe_results = state.get("perturbation_probe", {}).get("results", [])
+        perturbation_flip = any(result.get("unsupported_flip") for result in probe_results)
+        no_source_factual = (
+            state["question_type"] in ["factual_qa", "research_qa", "mixed"]
+            and not external_evidence
+        )
+        provider_error = state.get("provider_error") or state.get("structured_analysis_error")
+        score = state["score"]
+
+        if contradicted:
+            evidence_status = "Attached or fetched sources contradict at least one checked claim."
+        elif external_evidence and not_found:
+            evidence_status = "Sources support some claims, but at least one checked claim was not found."
+        elif external_evidence and partially_supported:
+            evidence_status = "Sources partially support the answer; some claims need stronger support."
+        elif external_evidence and supported:
+            evidence_status = "Attached or fetched sources support the main checked claims."
+        elif self.retrieval_chunks:
+            evidence_status = "Attached sources were available, but none matched the answer's claims strongly enough."
+        else:
+            evidence_status = "No attached or fetched source supports this answer."
+
+        if high_contradicted or (contradicted and score < 65) or perturbation_flip or (no_source_factual and score < 55):
+            verdict = "do_not_rely"
+        elif score >= 75 and external_evidence and not contradicted and state["semantic_stability"] >= 0.55:
+            verdict = "rely"
+        else:
+            verdict = "use_with_caution"
+
+        if verdict == "do_not_rely":
+            verdict_reason = "The answer has a contradiction, unsupported current/factual claims, or a robustness flip that can change the conclusion."
+        elif verdict == "rely":
+            verdict_reason = "The main checked claims have source support, samples are reasonably consistent, and no blocking contradiction was found."
+        else:
+            verdict_reason = "The answer may be useful, but evidence, calibration, or robustness signals are not strong enough for unqualified reliance."
+
+        main_uncertainty = self._main_uncertainty(
+            state,
+            claims_by_id,
+            contradicted,
+            high_unsupported,
+            not_found,
+            no_source_factual,
+            perturbation_flip,
+        )
+        what_would_change = self._what_would_change(
+            state,
+            contradicted,
+            not_found,
+            no_source_factual,
+            perturbation_flip,
+        )
+        next_action = self._next_best_action(state, contradicted, no_source_factual, provider_error)
+        source_limitations = self._source_limitations(state, external_evidence, not_found, contradicted)
+
+        positive = []
+        if external_evidence:
+            positive.append("%d of %d checked claims have direct or partial source support" % (len(supported) + len(partially_supported), len(assessments)))
+        if state["semantic_stability"] >= 0.55:
+            positive.append("Independent samples mostly agree at the meaning level")
+        if not perturbation_flip:
+            positive.append("Robustness checks did not find an unsupported answer flip")
+        positive.append("The pipeline recorded observable generation, retrieval, checking, and scoring steps")
+
+        negative = []
+        if not external_evidence:
+            negative.append(evidence_status)
+        if contradicted:
+            negative.append("%d checked claim%s contradicted by matched evidence" % (len(contradicted), "" if len(contradicted) == 1 else "s"))
+        if high_unsupported:
+            negative.append("%d high-impact claim%s lacked direct source support" % (len(high_unsupported), "" if len(high_unsupported) == 1 else "s"))
+        if state["semantic_stability"] < 0.55:
+            negative.append("Generated samples disagreed enough to lower trust")
+        if provider_error:
+            negative.append("Provider output had a recoverable error: %s" % provider_error)
+        negative.extend(state["score_caps"])
+        if not negative:
+            negative.append("Remaining risk is calibration: the score is diagnostic, not a probability")
+
+        return {
+            "answer": {
+                "verdict": verdict,
+                "verdict_reason": verdict_reason,
+                "next_best_action": next_action,
+                "evidence_status": evidence_status,
+                "source_limitations": source_limitations,
+                "main_uncertainty": main_uncertainty,
+                "what_would_change_the_answer": what_would_change,
+                "recommended_user_action": next_action,
+            },
+            "top_positive_signals": positive[:4],
+            "top_negative_signals": negative[:5],
+            "analysis_basis": self._analysis_basis(state),
+        }
+
+    def _main_uncertainty(
+        self,
+        state: Dict[str, Any],
+        claims_by_id: Dict[str, Dict[str, Any]],
+        contradicted: List[Dict[str, Any]],
+        high_unsupported: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        no_source_factual: bool,
+        perturbation_flip: bool,
+    ) -> str:
+        if contradicted:
+            claim = claims_by_id.get(contradicted[0]["claim_id"], {})
+            return "A matched source conflicts with this claim: %s" % claim.get("text", "a checked claim")
+        if perturbation_flip:
+            return "A robustness prompt changed the answer without adding evidence."
+        if no_source_factual:
+            return "The factual or current parts are not grounded in attached or fetched sources."
+        if high_unsupported:
+            claim = claims_by_id.get(high_unsupported[0]["claim_id"], {})
+            return "A high-impact claim lacks direct source support: %s" % claim.get("text", "a checked claim")
+        if state["semantic_stability"] < 0.55:
+            return "Generated samples did not converge cleanly on one meaning."
+        if not_found:
+            claim = claims_by_id.get(not_found[0]["claim_id"], {})
+            return "At least one checked claim was not found in the available sources: %s" % claim.get("text", "a checked claim")
+        return "The remaining uncertainty is whether the retrieved snippets fully cover the answer's strongest claim."
+
+    def _what_would_change(
+        self,
+        state: Dict[str, Any],
+        contradicted: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        no_source_factual: bool,
+        perturbation_flip: bool,
+    ) -> str:
+        if contradicted:
+            return "A stronger source resolving the contradiction, or a corrected answer that aligns with the cited source."
+        if perturbation_flip:
+            return "Consistent answers under neutral, pressure, and false-premise prompts."
+        if no_source_factual:
+            return "A reliable dated source or uploaded document that directly supports the factual claims."
+        if not_found:
+            return "Source passages that directly establish the unsupported claim instead of only matching nearby terms."
+        if state["semantic_stability"] < 0.55:
+            return "Multiple samples converging on the same answer meaning."
+        return "New source evidence that contradicts a supported claim or changes the decision constraints."
+
+    def _next_best_action(
+        self,
+        state: Dict[str, Any],
+        contradicted: List[Dict[str, Any]],
+        no_source_factual: bool,
+        provider_error: Optional[str],
+    ) -> str:
+        if provider_error:
+            return "Retry after checking provider settings, then compare whether the answer changes."
+        if self._is_high_stakes_question(state["run"]["question"]):
+            return "Use this as preparation only; verify with a qualified professional or primary source before acting."
+        if contradicted:
+            return "Open the contradicted claim and source snippet before relying on the answer."
+        if no_source_factual:
+            return "Attach a reliable source or URL and rerun before relying on the factual answer."
+        if not self._has_external_evidence(state["evidence"]):
+            return "Attach source material if the answer needs factual grounding."
+        return "Use the answer with the reliability cards and source snippets kept visible."
+
+    def _source_limitations(
+        self,
+        state: Dict[str, Any],
+        external_evidence: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        contradicted: List[Dict[str, Any]],
+    ) -> str:
+        if not external_evidence and not self.retrieval_chunks:
+            return "No file or URL source was available for retrieval."
+        if not external_evidence:
+            return "Attached source text was indexed, but retrieval found no strong claim-level match."
+        if contradicted:
+            return "At least one source match contradicts the answer, so source support is mixed."
+        if not_found:
+            return "Source support covers only part of the answer; unsupported claims remain listed in details."
+        return "Source support is limited to the attached or fetched documents used for this message."
+
+    def _analysis_basis(self, state: Dict[str, Any]) -> List[Dict[str, str]]:
+        basis = [
+            {
+                "signal": "Claim support",
+                "method": "atomic_claim_support",
+                "research_lineage": "FActScore and SAFE / LongFact",
+                "limitation": "Claim extraction and lexical retrieval can miss paraphrases or source context.",
+            },
+            {
+                "signal": "Sample consistency",
+                "method": "sample_consistency",
+                "research_lineage": "SelfCheckGPT",
+                "limitation": "Agreement across samples is useful evidence, not proof of truth.",
+            },
+            {
+                "signal": "Meaning disagreement",
+                "method": "semantic_entropy",
+                "research_lineage": "Semantic Entropy",
+                "limitation": "The local clustering approximation is diagnostic and should be calibrated with labels.",
+            },
+            {
+                "signal": "Calibration",
+                "method": "calibration",
+                "research_lineage": "Reliability diagrams and expected calibration error",
+                "limitation": "Scores remain diagnostic until enough local labels exist.",
+            },
+            {
+                "signal": "Reasoning-trace guardrail",
+                "method": "unfaithful_cot_guardrail",
+                "research_lineage": "Unfaithful chain-of-thought findings",
+                "limitation": "The app shows observable steps, not hidden model thoughts.",
+            },
+        ]
+        if state.get("perturbation_probe"):
+            basis.append(
+                {
+                    "signal": "Robustness",
+                    "method": "perturbation_check",
+                    "research_lineage": "Behavioral perturbation and sycophancy checks",
+                    "limitation": "Prompt pressure checks are adversarial probes, not exhaustive verification.",
+                }
+            )
+        return basis
+
+    def _apply_runtime_score_caps(self, state: Dict[str, Any]) -> None:
+        probe_results = state.get("perturbation_probe", {}).get("results") or []
+        if any(result.get("unsupported_flip") for result in probe_results):
+            state["score"] = min(int(state.get("score", 0)), 55)
+            cap = "perturbation check flipped answer without new evidence: score capped at 55"
+            if cap not in state["score_caps"]:
+                state["score_caps"].append(cap)
+        if any(item.get("relation") == "contradicted" for item in state.get("claim_assessments", [])):
+            state["score"] = min(int(state.get("score", 0)), 60)
+            cap = "source contradiction found: score capped at 60"
+            if cap not in state["score_caps"]:
+                state["score_caps"].append(cap)
+
     def _build_graph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         run = state["run"]
-        has_external_evidence = self._has_external_evidence(state["evidence"])
+        self._apply_runtime_score_caps(state)
+        reliability = self._reliability_summary(state)
         return {
             "run": {
                 "run_id": run["run_id"],
@@ -799,17 +1369,11 @@ class ReliabilityPipeline:
             },
             "answer": {
                 **state["answer"],
+                **reliability["answer"],
                 "reliability_score": state["score"],
                 "calibration_status": state["calibration"]["status"],
-                "top_positive_signals": [
-                    "Trace covers the full pipeline",
-                    "Answer preserves uncertainty and dissent",
-                    "Stress tests did not cause unsupported reversal",
-                ],
-                "top_negative_signals": [
-                    "Some claims still need stronger source support" if has_external_evidence else "No retrieved documents or fetched sources matched most claims",
-                    "High-impact assumptions remain sensitive to user goals",
-                ],
+                "top_positive_signals": reliability["top_positive_signals"],
+                "top_negative_signals": reliability["top_negative_signals"],
             },
             "claims": state["claims"],
             "evidence": state["evidence"],
@@ -831,6 +1395,7 @@ class ReliabilityPipeline:
             "causal_probe": state["perturbation_probe"],
             "features": state["features"],
             "score_caps": state["score_caps"],
+            "analysis_basis": reliability["analysis_basis"],
             "export": {
                 "format": "ReliabilityEvidenceGraph",
                 "json_ready": True,

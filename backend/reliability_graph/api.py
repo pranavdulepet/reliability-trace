@@ -1,5 +1,7 @@
+import hashlib
 import json
 import os
+import re
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -221,6 +223,10 @@ def list_documents():
 
 @app.post("/api/documents", status_code=201)
 def save_document(payload: DocumentCreate):
+    content_sha = hashlib.sha256(payload.text.encode("utf-8")).hexdigest()
+    existing = storage.find_document_by_signature(settings.user_id, content_sha, payload.source_url)
+    if existing:
+        return existing
     chunks = build_chunks(payload.text)
     if not chunks:
         raise HTTPException(status_code=400, detail="document did not contain indexable text")
@@ -239,7 +245,11 @@ def fetch_document(payload: SourceFetchCreate):
     try:
         fetched = fetch_url_text(payload.url)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=_sanitize_error(str(exc))) from exc
+    content_sha = hashlib.sha256(fetched["text"].encode("utf-8")).hexdigest()
+    existing = storage.find_document_by_signature(settings.user_id, content_sha, fetched["source_url"])
+    if existing:
+        return existing
     chunks = build_chunks(fetched["text"])
     if not chunks:
         raise HTTPException(status_code=400, detail="source did not contain indexable text")
@@ -310,8 +320,9 @@ async def stream_run_events(run_id: str):
                         )
                 yield _sse(event)
         except Exception as exc:
-            storage.fail_run(settings.user_id, run_id, str(exc), trace)
-            yield _sse({"type": "error", "message": str(exc)})
+            message = _sanitize_error(str(exc))
+            storage.fail_run(settings.user_id, run_id, message, trace)
+            yield _sse({"type": "error", "message": message})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -391,3 +402,18 @@ def _conversation_title(content: str) -> str:
 
 def _sse(event):
     return "event: %s\ndata: %s\n\n" % (event.get("type", "message"), json.dumps(event))
+
+
+SECRET_PATTERNS = [
+    re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"tml-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
+]
+
+
+def _sanitize_error(message: str) -> str:
+    cleaned = message
+    for pattern in SECRET_PATTERNS:
+        cleaned = pattern.sub(lambda match: (match.group(1) if match.lastindex else "") + "[redacted]", cleaned)
+    return cleaned[:500]

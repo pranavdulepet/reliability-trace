@@ -1,8 +1,12 @@
 import hashlib
 import html
+import ipaddress
 import json
 import math
 import re
+import socket
+import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -12,6 +16,18 @@ TAG_RE = re.compile(r"<[^>]+>")
 SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
 WHITESPACE_RE = re.compile(r"\s+")
 VECTOR_DIMS = 192
+MAX_FETCH_BYTES = 1_500_000
+MAX_REDIRECTS = 3
+ALLOWED_CONTENT_TYPES = {
+    "application/json",
+    "application/xhtml+xml",
+    "application/xml",
+    "text/csv",
+    "text/html",
+    "text/markdown",
+    "text/plain",
+    "text/xml",
+}
 
 STOPWORDS = {
     "a",
@@ -153,25 +169,26 @@ def evidence_for_claims(
 
 
 def support_relation(claim: str, snippet: str) -> str:
-    claim_lower = claim.lower()
+    claim_lower = re.sub(r"^based on (?:the )?(?:attached|fetched) source,\s*", "", claim.lower()).strip()
+    claim_for_tokens = claim_lower or claim
     snippet_lower = snippet.lower()
-    claim_tokens = set(tokenize(claim))
+    claim_tokens = set(tokenize(claim_for_tokens))
     snippet_tokens = set(tokenize(snippet))
 
     if claim_lower.strip(". ") in snippet_lower:
         return "supports"
     if claim_tokens and claim_tokens.issubset(snippet_tokens):
         return "supports"
-    if "special causal reasoning mode" in claim_lower and (
-        "supported provider" in snippet_lower or "behavioral diagnostics" in snippet_lower or "do not reveal hidden reasoning" in snippet_lower
-    ):
-        return "contradicts"
     overlap = len(claim_tokens & snippet_tokens) / float(len(claim_tokens) or 1)
     if ("normal api provider" in claim_lower or "supported provider" in claim_lower) and (
         "supported provider" in snippet_lower or "normal api provider" in snippet_lower
     ):
         return "supports"
-    if overlap >= 0.5 and bool(claim_tokens & NEGATION_TERMS) != bool(snippet_tokens & NEGATION_TERMS):
+    if (
+        overlap >= 0.3
+        and len(claim_tokens & snippet_tokens) >= 3
+        and bool(claim_tokens & NEGATION_TERMS) != bool(snippet_tokens & NEGATION_TERMS)
+    ):
         return "contradicts"
     return "supports" if overlap >= 0.45 else "partially_supports"
 
@@ -206,21 +223,89 @@ def compact_snippet(text: str, query: str, max_chars: int = 520) -> str:
 
 
 def fetch_url_text(url: str, timeout: int = 15) -> Dict[str, str]:
-    if not url.startswith(("http://", "https://")):
+    current_url = url.strip()
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    for _redirect in range(MAX_REDIRECTS + 1):
+        _validate_fetch_url(current_url)
+        request = urllib.request.Request(
+            current_url,
+            headers={
+                "User-Agent": "ReliabilityGraph/1.0 source retrieval",
+                "Accept": "text/html,text/plain,text/markdown,text/csv,application/json,application/xhtml+xml",
+            },
+        )
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                content_type = _content_type(response.headers.get("content-type", ""))
+                if not _is_allowed_content_type(content_type):
+                    raise ValueError("unsupported source content type: %s" % (content_type or "unknown"))
+                content_length = response.headers.get("content-length")
+                if content_length:
+                    try:
+                        if int(content_length) > MAX_FETCH_BYTES:
+                            raise ValueError("source is too large to fetch")
+                    except ValueError:
+                        if content_length.strip().isdigit():
+                            raise
+                raw = response.read(MAX_FETCH_BYTES + 1)
+                if len(raw) > MAX_FETCH_BYTES:
+                    raise ValueError("source is too large to fetch")
+                text = raw.decode("utf-8", errors="replace")
+                title = title_from_html(text) if "html" in content_type else current_url
+                return {"title": title or current_url, "text": html_to_text(text), "source_url": current_url}
+        except urllib.error.HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                location = exc.headers.get("location")
+                if not location:
+                    raise ValueError("source redirect is missing a Location header") from exc
+                current_url = urllib.parse.urljoin(current_url, location)
+                continue
+            raise ValueError("source returned HTTP %s" % exc.code) from exc
+        except urllib.error.URLError as exc:
+            raise ValueError("source could not be fetched") from exc
+    raise ValueError("source redirected too many times")
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _validate_fetch_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
         raise ValueError("only http and https sources are supported")
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": "ReliabilityGraph/0.1 source retrieval",
-            "Accept": "text/html,text/plain,application/xhtml+xml",
-        },
+    if parsed.username or parsed.password:
+        raise ValueError("source URLs cannot include credentials")
+    if not parsed.hostname:
+        raise ValueError("source URL is missing a host")
+    try:
+        host_infos = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError("source host could not be resolved") from exc
+    for info in host_infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if _is_blocked_ip(ip):
+            raise ValueError("source host resolves to a blocked network")
+
+
+def _is_blocked_ip(ip: ipaddress._BaseAddress) -> bool:
+    return bool(
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        content_type = response.headers.get("content-type", "")
-        raw = response.read(1_500_000)
-    text = raw.decode("utf-8", errors="replace")
-    title = title_from_html(text) if "html" in content_type else url
-    return {"title": title or url, "text": html_to_text(text), "source_url": url}
+
+
+def _content_type(value: str) -> str:
+    return value.split(";", 1)[0].strip().lower()
+
+
+def _is_allowed_content_type(value: str) -> bool:
+    return value in ALLOWED_CONTENT_TYPES or value.startswith("text/")
 
 
 def html_to_text(raw: str) -> str:

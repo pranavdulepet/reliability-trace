@@ -1,5 +1,8 @@
+import urllib.error
+
 from backend.reliability_graph.benchmarks import build_benchmark_report
-from backend.reliability_graph.retrieval import build_chunks, evidence_for_claims, search_chunks, support_relation
+import backend.reliability_graph.retrieval as retrieval_module
+from backend.reliability_graph.retrieval import build_chunks, evidence_for_claims, fetch_url_text, search_chunks, support_relation
 from backend.reliability_graph.schemas import RunCreate
 from backend.reliability_graph.storage import Storage
 
@@ -55,6 +58,16 @@ def test_storage_saves_documents_and_searches_chunks(tmp_path):
 
     assert document["chunk_count"] == 1
     assert matches[0]["title"] == "Probe Notes"
+
+
+def test_storage_reuses_duplicate_documents_by_hash(tmp_path):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    text = "ReliabilityGraph stores attachment chunks for claim matching."
+    first = storage.save_document("user_a", "First", text, None, "uploaded_document", build_chunks(text))
+    duplicate = storage.find_document_by_signature("user_a", first["content_sha256"], None)
+
+    assert duplicate["document_id"] == first["document_id"]
 
 
 def test_storage_filters_chunks_to_chat_attachments(tmp_path):
@@ -130,3 +143,108 @@ def test_benchmark_report_uses_labeled_graphs():
     assert report["status"] == "local_calibration"
     assert report["label_count"] == 1
     assert report["ablations"]
+
+
+def test_fetch_url_blocks_private_and_credentialed_targets():
+    for url in ["http://127.0.0.1/private", "http://user:pass@example.com/source"]:
+        try:
+            fetch_url_text(url)
+        except ValueError as exc:
+            assert "blocked network" in str(exc) or "credentials" in str(exc)
+        else:
+            raise AssertionError("unsafe URL was not blocked")
+
+
+def test_fetch_url_rejects_unsupported_content_type(monkeypatch):
+    monkeypatch.setattr(retrieval_module.socket, "getaddrinfo", public_getaddrinfo)
+    monkeypatch.setattr(
+        retrieval_module.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(FakeResponse({"content-type": "application/octet-stream"}, b"\x00\x01")),
+    )
+
+    try:
+        fetch_url_text("https://example.com/file.bin")
+    except ValueError as exc:
+        assert "unsupported source content type" in str(exc)
+    else:
+        raise AssertionError("unsupported content type was not rejected")
+
+
+def test_fetch_url_rejects_oversized_content(monkeypatch):
+    monkeypatch.setattr(retrieval_module.socket, "getaddrinfo", public_getaddrinfo)
+    monkeypatch.setattr(
+        retrieval_module.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeOpener(FakeResponse({"content-type": "text/plain", "content-length": "1500001"}, b"too large")),
+    )
+
+    try:
+        fetch_url_text("https://example.com/large.txt")
+    except ValueError as exc:
+        assert "too large" in str(exc)
+    else:
+        raise AssertionError("oversized content was not rejected")
+
+
+def test_fetch_url_rejects_redirect_into_blocked_network(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_module.socket,
+        "getaddrinfo",
+        lambda host, *args, **kwargs: public_getaddrinfo(host, *args, **kwargs)
+        if host == "example.com"
+        else [("inet", "sock", 0, "", ("127.0.0.1", 80))],
+    )
+    monkeypatch.setattr(
+        retrieval_module.urllib.request,
+        "build_opener",
+        lambda *_handlers: FakeRedirectOpener("http://127.0.0.1/internal"),
+    )
+
+    try:
+        fetch_url_text("https://example.com/source")
+    except ValueError as exc:
+        assert "blocked network" in str(exc)
+    else:
+        raise AssertionError("unsafe redirect was not blocked")
+
+
+def public_getaddrinfo(*_args, **_kwargs):
+    return [("inet", "sock", 0, "", ("93.184.216.34", 443))]
+
+
+class FakeResponse:
+    def __init__(self, headers, body):
+        self.headers = headers
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def read(self, *_args):
+        return self.body
+
+
+class FakeOpener:
+    def __init__(self, response):
+        self.response = response
+
+    def open(self, *_args, **_kwargs):
+        return self.response
+
+
+class FakeRedirectOpener:
+    def __init__(self, location):
+        self.location = location
+
+    def open(self, request, *_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            request.full_url,
+            302,
+            "Found",
+            {"location": self.location},
+            None,
+        )

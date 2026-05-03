@@ -562,6 +562,33 @@ class Storage:
                 )
         return self.get_document(user_id, document_id)
 
+    def find_document_by_signature(
+        self,
+        user_id: str,
+        content_sha256: str,
+        source_url: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        params: List[Any] = [user_id, content_sha256]
+        source_filter = ""
+        if source_url:
+            source_filter = " or source_url = ?"
+            params.append(source_url)
+        with self._connect() as con:
+            row = con.execute(
+                """
+                select document_id
+                from documents
+                where user_id = ? and (content_sha256 = ?%s)
+                order by created_at desc
+                limit 1
+                """
+                % source_filter,
+                params,
+            ).fetchone()
+        if row is None:
+            return None
+        return self.get_document(user_id, row["document_id"])
+
     def get_document(self, user_id: str, document_id: str) -> Dict[str, Any]:
         with self._connect() as con:
             row = con.execute(
