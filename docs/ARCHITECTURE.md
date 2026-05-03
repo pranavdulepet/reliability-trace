@@ -23,10 +23,10 @@ SQLite is the local storage target because it keeps setup small. The storage lay
 
 The frontend is a React + TypeScript app. It presents:
 
-- Provider key status and add/rotate/delete controls.
-- A question workbench with cost/sample controls.
+- Provider vault and readiness controls.
+- A question workbench with progressive provider and run options.
 - A live trace panel.
-- Report tabs for Answer, Claims, Evidence, Assumptions, Decision Analysis, Disagreement, Stress Tests, Trace, Calibration, Causal Probe, and Export.
+- Report tabs for Summary, Claims, Sources, Assumptions, Decision, Disagreement, Checks, Calibration, Causal Probe, and Export.
 
 ## Provider Boundary
 

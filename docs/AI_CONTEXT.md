@@ -6,6 +6,8 @@ Read this first when modifying the repo.
 
 ReliabilityGraph answers one question: should the user trust this answer? The product must show observable evidence, not hidden chain-of-thought. Every run produces a Reliability Evidence Graph that can be inspected and exported.
 
+For implementation status, read `docs/PLAN_STATUS.md` before assuming a section of `plan.md` is already complete.
+
 ## Non-Negotiables
 
 - No provider key is ever exposed to frontend code.
@@ -23,6 +25,7 @@ ReliabilityGraph answers one question: should the user trust this answer? The pr
 - Provider abstraction: `backend/reliability_graph/providers`
 - Graph pipeline: `backend/reliability_graph/pipeline`
 - Frontend app: `frontend/src/App.tsx`
+- Implementation status: `docs/PLAN_STATUS.md`
 
 ## Change Discipline
 

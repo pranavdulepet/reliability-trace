@@ -56,7 +56,7 @@ def list_provider_metadata(saved_providers: List[str], env_key_providers: Option
     rows: List[Dict[str, object]] = [
         {
             "provider": "preview",
-            "label": "Preview Engine",
+            "label": "Core Engine",
             "default_model": None,
             "key_env_var": None,
             "key_state": "not_required",

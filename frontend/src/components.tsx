@@ -1,27 +1,6 @@
 import type { Dispatch, FormEvent, SetStateAction } from "react";
 import type { ProviderKeyView, ProviderMetadata, RunCreate, RunView, StreamEvent } from "./types";
 
-interface ProviderRailProps {
-  providers: ProviderMetadata[];
-  compact?: boolean;
-}
-
-export function ProviderRail({ providers, compact = false }: ProviderRailProps) {
-  return (
-    <section className={compact ? "provider-rail compact" : "provider-rail"} aria-label="Provider status">
-      {providers.map((provider) => (
-        <div className="provider-status" key={provider.provider}>
-          <span className={`status-dot status-${provider.key_state}`} />
-          <div>
-            <strong>{provider.label}</strong>
-            <span>{formatKeyState(provider.key_state)}</span>
-          </div>
-        </div>
-      ))}
-    </section>
-  );
-}
-
 interface KeyManagerProps {
   providers: ProviderMetadata[];
   keys: ProviderKeyView[];
@@ -69,7 +48,7 @@ export function KeyManager({
       </form>
       <div className="key-list">
         {keys.length === 0 ? (
-          <p className="empty">No provider keys saved yet. Preview audits remain available.</p>
+          <p className="empty">No provider keys saved yet. Built-in audits remain available.</p>
         ) : (
           keys.map((key) => (
             <div className="key-row" key={key.provider}>
@@ -93,18 +72,19 @@ interface RunComposerProps {
   form: RunCreate;
   setForm: Dispatch<SetStateAction<RunCreate>>;
   running: boolean;
+  hasResult: boolean;
   onSubmit: (event: FormEvent) => void;
 }
 
-export function RunComposer({ providers, form, setForm, running, onSubmit }: RunComposerProps) {
+export function RunComposer({ providers, form, setForm, running, hasResult, onSubmit }: RunComposerProps) {
   const selectedProvider = providers.find((provider) => provider.provider === form.provider);
   const providerReady = selectedProvider?.key_state === "saved" || selectedProvider?.key_state === "env";
   const isPreview = form.provider === "preview" || form.provider === "local";
   return (
     <section className="panel composer hero-panel">
       <div className="section-heading">
-        <h2>Answer Audit</h2>
-        <p>Ask one serious question. ReliabilityGraph will separate answer quality into observable evidence.</p>
+        <h2>Ask</h2>
+        <p>We’ll audit the answer and show what supports it, what weakens it, and what would change it.</p>
       </div>
       <form onSubmit={onSubmit}>
         <textarea
@@ -112,56 +92,78 @@ export function RunComposer({ providers, form, setForm, running, onSubmit }: Run
           onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))}
           placeholder="Should I build an LLM answer-reliability product?"
         />
-        <div className="control-grid">
-          <label>
-            Provider
-            <select
-              value={form.provider}
-              onChange={(event) => {
-                const provider = providers.find((item) => item.provider === event.target.value);
-                setForm((current) => ({
-                  ...current,
-                  provider: event.target.value,
-                  model: provider?.default_model ?? null,
-                }));
-              }}
-            >
-              {providers.map((provider) => (
-                <option key={provider.provider} value={provider.provider}>
-                  {provider.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Model
-            <input
-              value={form.model ?? ""}
-              placeholder={selectedProvider?.default_model ?? "Auto"}
-              onChange={(event) => setForm((current) => ({ ...current, model: event.target.value || null }))}
-            />
-          </label>
-          <label>
-            Samples
-            <input
-              min={1}
-              max={5}
-              type="number"
-              value={form.samples}
-              onChange={(event) => setForm((current) => ({ ...current, samples: Number(event.target.value) }))}
-            />
-          </label>
-          <label>
-            Max cost
-            <input
-              min={0}
-              max={100}
-              step={0.25}
-              type="number"
-              value={form.max_cost_usd}
-              onChange={(event) => setForm((current) => ({ ...current, max_cost_usd: Number(event.target.value) }))}
-            />
-          </label>
+        <div className="composer-meta">
+          <span>{form.question.length} / 12000</span>
+          <span>Shift + Enter for a new line</span>
+        </div>
+        <div className="provider-choice-header">
+          <div>
+            <h3>Providers</h3>
+            <p>Start simple, or use a connected provider when you want live candidates.</p>
+          </div>
+          <details className="advanced-options">
+            <summary>Options</summary>
+            <div className="advanced-grid">
+              <label>
+                Model
+                <input
+                  value={form.model ?? ""}
+                  placeholder={selectedProvider?.default_model ?? "Auto"}
+                  onChange={(event) => setForm((current) => ({ ...current, model: event.target.value || null }))}
+                />
+              </label>
+              <label>
+                Samples
+                <input
+                  min={1}
+                  max={5}
+                  type="number"
+                  value={form.samples}
+                  onChange={(event) => setForm((current) => ({ ...current, samples: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                Max cost
+                <input
+                  min={0}
+                  max={100}
+                  step={0.25}
+                  type="number"
+                  value={form.max_cost_usd}
+                  onChange={(event) => setForm((current) => ({ ...current, max_cost_usd: Number(event.target.value) }))}
+                />
+              </label>
+            </div>
+          </details>
+        </div>
+        <div className="provider-card-grid" role="radiogroup" aria-label="Provider">
+          {providers.map((provider) => {
+            const ready = provider.key_state === "saved" || provider.key_state === "env" || provider.key_state === "not_required";
+            const selected = form.provider === provider.provider;
+            return (
+              <button
+                className={selected ? "provider-card selected" : "provider-card"}
+                key={provider.provider}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => {
+                  setForm((current) => ({
+                    ...current,
+                    provider: provider.provider,
+                    model: provider.default_model ?? null,
+                    use_live_provider: provider.key_state === "saved" || provider.key_state === "env",
+                  }));
+                }}
+              >
+                <span className="provider-logo">{provider.label.slice(0, 1)}</span>
+                <span>
+                  <strong>{provider.label}</strong>
+                  <small>{ready ? provider.key_state === "not_required" ? "Smart default" : "Connected" : "Add key"}</small>
+                </span>
+              </button>
+            );
+          })}
         </div>
         <label className="check-row">
           <input
@@ -172,9 +174,12 @@ export function RunComposer({ providers, form, setForm, running, onSubmit }: Run
           />
           Use connected provider for candidate generation
         </label>
-        <button className="primary-action" disabled={running || form.question.trim().length < 3} type="submit">
-          {running ? "Auditing" : "Run Answer Audit"}
-        </button>
+        <div className="run-action-row">
+          <button className="primary-action" disabled={running || form.question.trim().length < 3} type="submit">
+            {running ? "Auditing" : "Run audit"}
+          </button>
+          <span>{hasResult ? "Your latest result is below." : "Typical audit takes under a minute."}</span>
+        </div>
       </form>
     </section>
   );
@@ -196,8 +201,15 @@ export function TracePanel({ events, progress, running, graph }: TracePanelProps
           <p>The timeline appears when an audit starts.</p>
         </div>
         <div className="plan-list">
-          {["Candidate answers", "Claim extraction", "Evidence assessment", "Robustness checks", "Diagnostic score"].map((item) => (
-            <div className="plan-row" key={item}>{item}</div>
+          {[
+            ["Generate answers", "Collect independent candidate responses."],
+            ["Find claims", "Break the answer into checkable pieces."],
+            ["Check reliability", "Score support, uncertainty, and robustness."],
+          ].map(([title, body]) => (
+            <div className="plan-row" key={title}>
+              <strong>{title}</strong>
+              <span>{body}</span>
+            </div>
           ))}
         </div>
       </section>
@@ -265,10 +277,4 @@ export function RunHistory({ runs, activeRunId, onSelect }: RunHistoryProps) {
       </div>
     </section>
   );
-}
-
-function formatKeyState(state: string): string {
-  if (state === "not_required") return "ready";
-  if (state === "env") return "connected";
-  return state.replace("_", " ");
 }

@@ -12,7 +12,6 @@ import {
 } from "./api";
 import {
   KeyManager,
-  ProviderRail,
   RunComposer,
   RunHistory,
   TracePanel,
@@ -61,7 +60,7 @@ function App() {
 
   async function refresh() {
     const [nextProviders, nextKeys, nextRuns] = await Promise.all([getProviders(), getKeys(), getRuns()]);
-    setProviders(nextProviders);
+    setProviders(nextProviders.map(normalizeProvider));
     setKeys(nextKeys);
     setRuns(nextRuns);
   }
@@ -158,10 +157,10 @@ function App() {
     <div className="workspace-shell">
       <aside className="sidebar">
         <div className="brand-block">
-          <div className="brand-mark">RG</div>
+          <div className="brand-mark" aria-hidden="true">RG</div>
           <div>
             <h1>ReliabilityGraph</h1>
-            <p>Answer reliability workspace</p>
+            <p>Reliability workspace</p>
           </div>
         </div>
         <nav className="main-nav" aria-label="Workspace">
@@ -171,18 +170,20 @@ function App() {
           <NavButton active={view === "benchmarks"} label="Benchmarks" onClick={() => setView("benchmarks")} />
           <NavButton active={view === "settings"} label="Settings" onClick={() => setView("settings")} />
         </nav>
-        <ProviderRail providers={providers} compact />
+        <button className="vault-card" type="button" onClick={() => setView("settings")}>
+          <span>Provider vault</span>
+          <strong>{providerSummary(providers)}</strong>
+        </button>
       </aside>
 
       <div className="content-shell">
         <header className="workspace-header">
           <div>
-            <span className="eyebrow">Answer Audit</span>
             <h2>{headerTitle(view)}</h2>
             <p>{headerSubtitle(view)}</p>
           </div>
           <div className="header-actions">
-            <button className="ghost-button" type="button" onClick={() => setView("settings")}>
+            <button className="ghost-button hide-mobile" type="button" onClick={() => setView("settings")}>
               Provider Vault
             </button>
             <button className="primary-compact" type="button" onClick={() => setView("workbench")}>
@@ -197,7 +198,14 @@ function App() {
           {view === "workbench" && (
             <>
               <div className="upper-grid">
-                <RunComposer providers={providers} form={form} setForm={setForm} running={running} onSubmit={handleStartRun} />
+                <RunComposer
+                  providers={providers}
+                  form={form}
+                  setForm={setForm}
+                  running={running}
+                  hasResult={Boolean(graph)}
+                  onSubmit={handleStartRun}
+                />
                 <TracePanel events={events} progress={progress} running={running} graph={graph} />
               </div>
               <Report graph={graph} activeTab={activeTab} setActiveTab={setActiveTab} />
@@ -318,18 +326,26 @@ function SettingsPage(props: {
           <h2>Provider Readiness</h2>
           <p>Choose the provider mix for higher-quality audits.</p>
         </div>
-        <ProviderRail providers={props.providers} />
+        <div className="provider-readiness-list">
+          {props.providers.map((provider) => (
+            <div className="provider-readiness-row" key={provider.provider}>
+              <span className={`status-dot status-${provider.key_state}`} />
+              <strong>{provider.label}</strong>
+              <span>{provider.key_state === "not_required" ? "ready" : provider.key_state}</span>
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   );
 }
 
 function headerTitle(view: WorkspaceView): string {
-  if (view === "runs") return "Audit history";
-  if (view === "sources") return "Source coverage";
-  if (view === "benchmarks") return "Calibration research";
+  if (view === "runs") return "Runs";
+  if (view === "sources") return "Sources";
+  if (view === "benchmarks") return "Benchmarks";
   if (view === "settings") return "Provider vault";
-  return "Evaluate an important answer";
+  return "Workbench";
 }
 
 function headerSubtitle(view: WorkspaceView): string {
@@ -337,11 +353,23 @@ function headerSubtitle(view: WorkspaceView): string {
   if (view === "sources") return "Inspect source coverage and claim-linked evidence.";
   if (view === "benchmarks") return "Track diagnostic score quality as labeled runs accumulate.";
   if (view === "settings") return "Connect Tinker, OpenAI, Claude, Gemini, and OpenRouter keys.";
-  return "Generate candidate answers, inspect claims, and see what changes trust.";
+  return "Ask a question. Get a clear reliability audit.";
 }
 
 function isPreviewProvider(provider: string): boolean {
   return provider === "preview" || provider === "local";
+}
+
+function providerSummary(providers: ProviderMetadata[]): string {
+  const connected = providers.filter((provider) => provider.key_state === "saved" || provider.key_state === "env").length;
+  return `${connected} connected`;
+}
+
+function normalizeProvider(provider: ProviderMetadata): ProviderMetadata {
+  if (provider.provider === "preview" || provider.provider === "local") {
+    return { ...provider, label: "Core Engine" };
+  }
+  return provider;
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(<App />);

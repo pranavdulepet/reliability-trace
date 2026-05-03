@@ -4,12 +4,11 @@ import type { ClaimAssessment, EvidenceItem, ReliabilityGraph } from "./types";
 export const TABS = [
   "Summary",
   "Claims",
-  "Evidence",
+  "Sources",
   "Assumptions",
   "Decision",
   "Disagreement",
-  "Robustness",
-  "Trace",
+  "Checks",
   "Calibration",
   "Causal Probe",
   "Export",
@@ -27,8 +26,8 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
   if (!graph) {
     return (
       <section className="report-shell empty-report">
-        <h2>Evidence Graph</h2>
-        <p>Run an audit to inspect answer support, assumptions, disagreement, robustness, calibration, and export JSON.</p>
+        <h2>Evidence graph</h2>
+        <p>Your summary will appear here after the audit finishes.</p>
       </section>
     );
   }
@@ -37,7 +36,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
     <section className="report-shell">
       <div className="report-header">
         <div>
-          <h2>Evidence Graph</h2>
+          <h2>Latest result</h2>
           <p>
             {graph.run.question_type} · {formatProvider(graph.run.provider)}
           </p>
@@ -63,12 +62,11 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
 function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Summary") return <AnswerTab graph={graph} />;
   if (tab === "Claims") return <ClaimsTab graph={graph} />;
-  if (tab === "Evidence") return <EvidenceTab graph={graph} />;
+  if (tab === "Sources") return <EvidenceTab graph={graph} />;
   if (tab === "Assumptions") return <AssumptionsTab graph={graph} />;
   if (tab === "Decision") return <DecisionTab graph={graph} />;
   if (tab === "Disagreement") return <DisagreementTab graph={graph} />;
-  if (tab === "Robustness") return <StressTab graph={graph} />;
-  if (tab === "Trace") return <TraceTab graph={graph} />;
+  if (tab === "Checks") return <StressTab graph={graph} />;
   if (tab === "Calibration") return <CalibrationTab graph={graph} />;
   if (tab === "Causal Probe") return <CausalProbeTab graph={graph} />;
   return <ExportTab graph={graph} />;
@@ -76,9 +74,19 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
 
 function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
   return (
-    <div className="answer-grid">
-      <div className="answer-main">
-        <h3>Audited Answer</h3>
+    <div className="summary-layout">
+      <section className="score-summary">
+        <div className="score-ring">
+          <strong>{graph.answer.reliability_score}</strong>
+          <span>/100</span>
+        </div>
+        <div>
+          <h3>Reliability is {scoreLabel(graph.answer.reliability_score).toLowerCase()}</h3>
+          <p>{graph.answer.summary}</p>
+        </div>
+      </section>
+      <section className="answer-main">
+        <h3>Answer</h3>
         <p>{graph.answer.final_answer}</p>
         {graph.answer.recommendation && (
           <>
@@ -90,15 +98,15 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
         <p>{graph.answer.main_uncertainty}</p>
         <h3>What Would Change The Answer</h3>
         <p>{graph.answer.what_would_change_the_answer}</p>
-      </div>
-      <div className="signal-panel">
+      </section>
+      <aside className="signal-panel">
         <h3>Trust Signals</h3>
         <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
         <h3>Risk Signals</h3>
         <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
         <h3>Recommended Action</h3>
         <p>{graph.answer.recommended_user_action}</p>
-      </div>
+      </aside>
     </div>
   );
 }
@@ -220,15 +228,6 @@ function StressTab({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
-function TraceTab({ graph }: { graph: ReliabilityGraph }) {
-  return (
-    <Table
-      columns={["Step", "Status", "Output", "Cost"]}
-      rows={graph.trace.map((span) => [span.type, span.status, span.output_summary, `$${span.cost_usd.toFixed(3)}`])}
-    />
-  );
-}
-
 function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div>
@@ -299,11 +298,17 @@ function formatNumber(value: number): string {
 }
 
 function formatProvider(provider: string): string {
-  if (provider === "local" || provider === "preview") return "Preview Engine";
+  if (provider === "local" || provider === "preview") return "Core Engine";
   if (provider === "openrouter") return "OpenRouter";
   return provider.slice(0, 1).toUpperCase() + provider.slice(1);
 }
 
 function formatStatus(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function scoreLabel(score: number): string {
+  if (score >= 80) return "Strong";
+  if (score >= 60) return "Moderate";
+  return "Limited";
 }
