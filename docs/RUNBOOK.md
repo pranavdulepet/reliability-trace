@@ -12,6 +12,8 @@ npm run dev
 
 Open `http://localhost:5173`.
 
+If Vite selects another port, the backend default CORS regex allows local `localhost` and `127.0.0.1` dev ports. Override `CORS_ORIGIN_REGEX` for stricter environments.
+
 ## Docker Compose
 
 ```bash

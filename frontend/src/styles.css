@@ -584,6 +584,11 @@ label {
   color: var(--muted);
 }
 
+.key-row strong,
+.key-row span {
+  display: block;
+}
+
 .status-dot {
   border-radius: 50%;
   display: inline-block;

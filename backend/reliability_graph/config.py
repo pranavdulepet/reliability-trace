@@ -8,11 +8,13 @@ class Settings:
         self,
         db_path: Path,
         cors_origins: List[str],
+        cors_origin_regex: Optional[str],
         user_id: str,
         secret: Optional[str],
     ) -> None:
         self.db_path = db_path
         self.cors_origins = cors_origins
+        self.cors_origin_regex = cors_origin_regex
         self.user_id = user_id
         self.secret = secret
 
@@ -26,6 +28,7 @@ class Settings:
         return cls(
             db_path=db_path,
             cors_origins=[origin.strip() for origin in cors.split(",") if origin.strip()],
+            cors_origin_regex=os.getenv("CORS_ORIGIN_REGEX", r"http://(localhost|127\.0\.0\.1):[0-9]+"),
             user_id=os.getenv("RELIABILITY_GRAPH_USER_ID", "local"),
             secret=os.getenv("RELIABILITY_GRAPH_SECRET"),
         )

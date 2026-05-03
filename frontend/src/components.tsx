@@ -178,6 +178,7 @@ export function ActivityTrace({
   progress: number;
   defaultOpen?: boolean;
 }) {
+  const visibleEvents = compactEvents(events);
   return (
     <details className="activity-box" open={defaultOpen}>
       <summary>
@@ -191,11 +192,11 @@ export function ActivityTrace({
         {events.length === 0 ? (
           <li>Waiting for the first observable step.</li>
         ) : (
-          events.map((event, index) => (
+          visibleEvents.map((event, index) => (
             <li key={`${event.message}-${index}`}>
               <strong>{formatTraceType(event.span?.type ?? event.type)}</strong>
               <p>{event.message}</p>
-              {event.span?.output_summary && <small>{formatTraceOutput(event.span)}</small>}
+              {event.span?.status === "completed" && event.span.output_summary !== "{}" && <small>{formatTraceOutput(event.span)}</small>}
             </li>
           ))
         )}
@@ -349,6 +350,19 @@ export function ProviderSettings({
 
 function formatTraceType(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function compactEvents(events: StreamEvent[]): StreamEvent[] {
+  const keyed = new Map<string, StreamEvent>();
+  const unkeyed: StreamEvent[] = [];
+  for (const event of events) {
+    if (event.span?.span_id) {
+      keyed.set(event.span.span_id, event);
+    } else {
+      unkeyed.push(event);
+    }
+  }
+  return [...keyed.values(), ...unkeyed].slice(-16);
 }
 
 export function formatTraceOutput(span: TraceSpan): string {
