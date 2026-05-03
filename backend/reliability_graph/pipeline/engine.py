@@ -641,9 +641,14 @@ class ReliabilityPipeline:
 
     def _clean_model_text(self, text: str) -> str:
         cleaned = text.strip()
+        if "### Answer" in cleaned:
+            cleaned = cleaned.split("### Answer", 1)[1]
+        cleaned = re.sub(r"^\s*[:\n-]+", "", cleaned).strip()
         if "Assistant:" in cleaned:
             cleaned = cleaned.split("Assistant:", 1)[1]
-            cleaned = cleaned.split("\n\nUser:", 1)[0]
+        for marker in ["\n\n### User", "\n### User", "\n\n### Instructions", "\n### Instructions", "\n\nUser:", "\nUser:"]:
+            cleaned = cleaned.split(marker, 1)[0]
+        cleaned = re.sub(r"^(Answer|Response):\s*", "", cleaned, flags=re.IGNORECASE).strip()
         return cleaned.strip()
 
     def _retrieval_context(self, question: str) -> str:

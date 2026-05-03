@@ -31,7 +31,7 @@ PROVIDER_DETAILS = {
     },
     "tinker": {
         "label": "Tinker",
-        "default_model": os.getenv("TINKER_MODEL", "meta-llama/Llama-3.2-1B"),
+        "default_model": os.getenv("TINKER_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
         "capabilities": ["generate", "stream_generate", "generate_structured", "logprobs", "perturbation_probe"],
     },
 }

@@ -1,13 +1,205 @@
-import type { Dispatch, FormEvent, SetStateAction } from "react";
-import type { ProviderKeyView, ProviderMetadata, RunCreate, RunView, StreamEvent } from "./types";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useState } from "react";
+import type { DraftAttachment } from "./App";
+import type {
+  ConversationSummary,
+  ProviderKeyView,
+  ProviderMetadata,
+  ProviderPreferenceResponse,
+  StreamEvent,
+} from "./types";
+
+interface ConversationListProps {
+  conversations: ConversationSummary[];
+  activeConversationId: string | null;
+  view: string;
+  onNewChat: () => void;
+  onSelectConversation: (conversationId: string) => void;
+  onOpenAbout: () => void;
+  onOpenSettings: () => void;
+}
+
+export function ConversationList({
+  conversations,
+  activeConversationId,
+  view,
+  onNewChat,
+  onSelectConversation,
+  onOpenAbout,
+  onOpenSettings,
+}: ConversationListProps) {
+  return (
+    <aside className="conversation-rail">
+      <div className="brand-block">
+        <div className="brand-mark" aria-hidden="true">RG</div>
+        <strong>ReliabilityGraph</strong>
+      </div>
+      <button className="new-chat-button" type="button" onClick={onNewChat}>
+        New chat
+      </button>
+      <nav className="conversation-list" aria-label="Conversations">
+        {conversations.length === 0 ? (
+          <p className="empty">No conversations yet.</p>
+        ) : (
+          conversations.map((conversation) => (
+            <button
+              className={conversation.conversation_id === activeConversationId && view === "chat" ? "conversation-item active" : "conversation-item"}
+              key={conversation.conversation_id}
+              type="button"
+              onClick={() => onSelectConversation(conversation.conversation_id)}
+            >
+              <span>{conversation.title}</span>
+              <small>{conversation.message_count} messages</small>
+            </button>
+          ))
+        )}
+      </nav>
+      <div className="rail-footer">
+        <button className={view === "about" ? "rail-link active" : "rail-link"} type="button" onClick={onOpenAbout}>
+          About
+        </button>
+        <button className={view === "settings" ? "rail-link active" : "rail-link"} type="button" onClick={onOpenSettings}>
+          Settings
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+interface ChatComposerProps {
+  value: string;
+  attachments: DraftAttachment[];
+  busy: boolean;
+  providerReady: boolean;
+  connectedProviderCount: number;
+  onChange: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+  onAddFiles: (files: FileList | null) => void;
+  onAddUrl: (url: string) => void;
+  onRemoveAttachment: (id: string) => void;
+  onOpenSettings: () => void;
+}
+
+export function ChatComposer({
+  value,
+  attachments,
+  busy,
+  providerReady,
+  connectedProviderCount,
+  onChange,
+  onSubmit,
+  onAddFiles,
+  onAddUrl,
+  onRemoveAttachment,
+  onOpenSettings,
+}: ChatComposerProps) {
+  const [urlDraft, setUrlDraft] = useState("");
+  const disabled = busy || value.trim().length < 3 || !providerReady;
+  return (
+    <form className="chat-composer" onSubmit={onSubmit}>
+      {attachments.length > 0 && (
+        <div className="attachment-row">
+          {attachments.map((attachment) => (
+            <button className={`attachment-chip status-${attachment.status}`} key={attachment.id} type="button" onClick={() => onRemoveAttachment(attachment.id)}>
+              <span>{attachment.kind === "file" ? "File" : "URL"}</span>
+              {attachment.title}
+            </button>
+          ))}
+        </div>
+      )}
+      <textarea
+        value={value}
+        placeholder="Ask a question..."
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            if (!disabled) event.currentTarget.form?.requestSubmit();
+          }
+        }}
+      />
+      <div className="composer-actions">
+        <label className="attachment-button">
+          Attach files
+          <input
+            accept=".txt,.md,.csv,.json,.log"
+            multiple
+            type="file"
+            onChange={(event) => {
+              onAddFiles(event.target.files);
+              event.target.value = "";
+            }}
+          />
+        </label>
+        <div className="url-adder">
+          <input value={urlDraft} placeholder="Add URL" onChange={(event) => setUrlDraft(event.target.value)} />
+          <button
+            type="button"
+            onClick={() => {
+              onAddUrl(urlDraft);
+              setUrlDraft("");
+            }}
+          >
+            Add
+          </button>
+        </div>
+        <div className="composer-status">
+          {providerReady ? "Ready" : connectedProviderCount === 0 ? "Connect a provider in Settings" : "Choose a default provider in Settings"}
+        </div>
+        {!providerReady && (
+          <button className="text-link" type="button" onClick={onOpenSettings}>
+            Settings
+          </button>
+        )}
+        <button className="send-button" disabled={disabled} type="submit">
+          {busy ? "Sending" : "Send"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export function ActivityTrace({
+  events,
+  progress,
+  defaultOpen = false,
+}: {
+  events: StreamEvent[];
+  progress: number;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details className="activity-box" open={defaultOpen}>
+      <summary>
+        <span>Activity</span>
+        <strong>{Math.round(progress * 100)}%</strong>
+      </summary>
+      <div className="activity-progress" aria-label="Activity progress">
+        <span style={{ width: `${Math.round(progress * 100)}%` }} />
+      </div>
+      <ol>
+        {events.length === 0 ? (
+          <li>Waiting for the first observable step.</li>
+        ) : (
+          events.map((event, index) => (
+            <li key={`${event.message}-${index}`}>
+              <strong>{formatTraceType(event.span?.type ?? event.type)}</strong>
+              <p>{event.message}</p>
+              {event.span?.output_summary && <code>{event.span.output_summary}</code>}
+            </li>
+          ))
+        )}
+      </ol>
+    </details>
+  );
+}
 
 interface KeyManagerProps {
   providers: ProviderMetadata[];
   keys: ProviderKeyView[];
   keyProvider: string;
   keyValue: string;
-  setKeyProvider: Dispatch<SetStateAction<string>>;
-  setKeyValue: Dispatch<SetStateAction<string>>;
+  setKeyProvider: Dispatch<SetStateAction<string>> | ((value: string) => void);
+  setKeyValue: Dispatch<SetStateAction<string>> | ((value: string) => void);
   onSave: (event: FormEvent) => void;
   onDelete: (provider: string) => void;
 }
@@ -24,10 +216,10 @@ export function KeyManager({
 }: KeyManagerProps) {
   const keyProviders = providers.filter((provider) => provider.provider !== "local" && provider.provider !== "preview");
   return (
-    <section className="panel key-panel">
+    <section className="settings-panel">
       <div className="section-heading">
-        <h2>Providers</h2>
-        <p>Keys are encrypted before storage and shown only as fingerprints.</p>
+        <h2>Provider keys</h2>
+        <p>Keys stay server-side and appear only as fingerprints.</p>
       </div>
       <form className="inline-form" onSubmit={onSave}>
         <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value)}>
@@ -48,7 +240,7 @@ export function KeyManager({
       </form>
       <div className="key-list">
         {keys.length === 0 ? (
-          <p className="empty">No provider keys saved yet. Connect Tinker or another provider before asking a question.</p>
+          <p className="empty">No provider keys saved.</p>
         ) : (
           keys.map((key) => (
             <div className="key-row" key={key.provider}>
@@ -67,241 +259,83 @@ export function KeyManager({
   );
 }
 
-interface RunComposerProps {
+export function ProviderSettings({
+  providers,
+  connectedProviders,
+  preference,
+  onSave,
+}: {
   providers: ProviderMetadata[];
-  form: RunCreate;
-  setForm: Dispatch<SetStateAction<RunCreate>>;
-  running: boolean;
-  hasResult: boolean;
-  onSubmit: (event: FormEvent) => void;
-  onOpenSettings: () => void;
-}
+  connectedProviders: ProviderMetadata[];
+  preference: ProviderPreferenceResponse | null;
+  onSave: (payload: { provider: string | null; model: string | null; samples: number; max_cost_usd: number }) => void;
+}) {
+  const [provider, setProvider] = useState<string | null>(preference?.preference.provider ?? connectedProviders[0]?.provider ?? null);
+  const [model, setModel] = useState(preference?.preference.model ?? "");
+  const [samples, setSamples] = useState(preference?.preference.samples ?? 3);
+  const [maxCost, setMaxCost] = useState(preference?.preference.max_cost_usd ?? 1);
 
-export function RunComposer({ providers, form, setForm, running, hasResult, onSubmit, onOpenSettings }: RunComposerProps) {
-  const realProviders = providers.filter(isRealProvider);
-  const selectedProvider = providers.find((provider) => provider.provider === form.provider);
-  const providerReady = Boolean(selectedProvider && isProviderConnected(selectedProvider));
-  const hasConnectedProvider = realProviders.some(isProviderConnected);
+  useEffect(() => {
+    setProvider(preference?.preference.provider ?? connectedProviders[0]?.provider ?? null);
+    setModel(preference?.preference.model ?? "");
+    setSamples(preference?.preference.samples ?? 3);
+    setMaxCost(preference?.preference.max_cost_usd ?? 1);
+  }, [preference, connectedProviders]);
+
+  const realProviders = providers.filter((item) => item.provider !== "local" && item.provider !== "preview");
   return (
-    <section className="panel composer chat-composer">
+    <section className="settings-panel">
       <div className="section-heading">
-        <h2>Ask</h2>
-        <p>Connect a provider, ask, then inspect the answer and every observable audit step.</p>
+        <h2>Default model</h2>
+        <p>Chat uses this default unless only one provider is connected.</p>
       </div>
-      <form onSubmit={onSubmit}>
-        <textarea
-          value={form.question}
-          onChange={(event) => setForm((current) => ({ ...current, question: event.target.value }))}
-          placeholder="Ask anything you want verified..."
-        />
-        <div className="composer-meta">
-          <span>{form.question.length} / 12000</span>
-          <span>{providerReady ? `${selectedProvider?.label} connected` : "Provider required"}</span>
+      <form
+        className="preference-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSave({ provider, model: model.trim() || null, samples, max_cost_usd: maxCost });
+        }}
+      >
+        <label>
+          Provider
+          <select value={provider ?? ""} onChange={(event) => setProvider(event.target.value || null)}>
+            <option value="">Auto</option>
+            {realProviders.map((item) => (
+              <option disabled={!connectedProviders.some((connected) => connected.provider === item.provider)} key={item.provider} value={item.provider}>
+                {item.label} {connectedProviders.some((connected) => connected.provider === item.provider) ? "" : "(missing key)"}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Model
+          <input value={model} placeholder="Provider default" onChange={(event) => setModel(event.target.value)} />
+        </label>
+        <div className="settings-number-row">
+          <label>
+            Samples
+            <input min={1} max={5} type="number" value={samples} onChange={(event) => setSamples(Number(event.target.value))} />
+          </label>
+          <label>
+            Max cost
+            <input min={0} max={100} step={0.25} type="number" value={maxCost} onChange={(event) => setMaxCost(Number(event.target.value))} />
+          </label>
         </div>
-        <div className="provider-choice-header">
-          <div>
-            <h3>Providers</h3>
-            <p>{hasConnectedProvider ? "Choose the model endpoint for this answer." : "Connect a key before starting."}</p>
-          </div>
-          <details className="advanced-options">
-            <summary>Options</summary>
-            <div className="advanced-grid">
-              <label>
-                Model
-                <input
-                  value={form.model ?? ""}
-                  placeholder={selectedProvider?.default_model ?? "Auto"}
-                  onChange={(event) => setForm((current) => ({ ...current, model: event.target.value || null }))}
-                />
-              </label>
-              <label>
-                Samples
-                <input
-                  min={1}
-                  max={5}
-                  type="number"
-                  value={form.samples}
-                  onChange={(event) => setForm((current) => ({ ...current, samples: Number(event.target.value) }))}
-                />
-              </label>
-              <label>
-                Max cost
-                <input
-                  min={0}
-                  max={100}
-                  step={0.25}
-                  type="number"
-                  value={form.max_cost_usd}
-                  onChange={(event) => setForm((current) => ({ ...current, max_cost_usd: Number(event.target.value) }))}
-                />
-              </label>
-            </div>
-          </details>
-        </div>
-        <div className="provider-card-grid" role="radiogroup" aria-label="Provider">
-          {realProviders.map((provider) => {
-            const ready = isProviderConnected(provider);
-            const selected = form.provider === provider.provider;
-            return (
-              <button
-                className={selected ? "provider-card selected" : "provider-card"}
-                key={provider.provider}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => {
-                  setForm((current) => ({
-                    ...current,
-                    provider: provider.provider,
-                    model: provider.default_model ?? null,
-                    use_live_provider: ready,
-                  }));
-                }}
-              >
-                <span className="provider-logo">{provider.label.slice(0, 1)}</span>
-                <span>
-                  <strong>{provider.label}</strong>
-                  <small>{ready ? "Connected" : "Add key"}</small>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        {!providerReady && (
-          <div className="provider-required">
-            <strong>Provider required</strong>
-            <p>ReliabilityGraph needs Tinker, OpenAI, Claude, Gemini, or OpenRouter to generate real answers.</p>
-            <button className="ghost-button" type="button" onClick={onOpenSettings}>
-              Connect provider
-            </button>
-          </div>
-        )}
-        <div className="run-action-row">
-          <button className="primary-action" disabled={running || !providerReady || form.question.trim().length < 3} type="submit">
-            {running ? "Auditing" : "Ask & audit"}
-          </button>
-          <span>{hasResult ? "Latest answer and reliability analysis are below." : "The trace appears as the answer generates."}</span>
-        </div>
+        <button type="submit">Save defaults</button>
       </form>
+      <div className="provider-readiness-list">
+        {realProviders.map((item) => (
+          <div className="provider-readiness-row" key={item.provider}>
+            <span className={`status-dot ${connectedProviders.some((connected) => connected.provider === item.provider) ? "ready" : "missing"}`} />
+            <strong>{item.label}</strong>
+            <span>{connectedProviders.some((connected) => connected.provider === item.provider) ? "connected" : "missing key"}</span>
+          </div>
+        ))}
+      </div>
     </section>
   );
-}
-
-interface TracePanelProps {
-  events: StreamEvent[];
-  progress: number;
-  running: boolean;
-  graph: unknown;
-}
-
-export function TracePanel({ events, progress, running, graph }: TracePanelProps) {
-  if (!running && events.length === 0 && !graph) {
-    return (
-      <section className="panel trace-panel">
-        <div className="section-heading">
-          <h2>Observable Trace</h2>
-          <p>The run will stream provider calls, retrieval, checks, and scoring here.</p>
-        </div>
-        <div className="plan-list">
-          {[
-            ["Provider call", "Generate answer candidates from the selected model."],
-            ["Source retrieval", "Search uploaded and fetched sources for relevant chunks."],
-            ["Claim extraction", "Break the answer into checkable statements."],
-            ["Source matching", "Map claims to support, contradiction, or missing evidence."],
-            ["Reliability score", "Combine support, uncertainty, disagreement, and probes."],
-          ].map(([title, body]) => (
-            <div className="plan-row" key={title}>
-              <strong>{title}</strong>
-              <span>{body}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-    );
-  }
-
-  return (
-    <section className="panel trace-panel">
-      <div className="section-heading horizontal">
-        <div>
-          <h2>Observable Trace</h2>
-          <p>{running ? "Streaming run events" : "Complete"}</p>
-        </div>
-        <strong>{Math.round(progress * 100)}%</strong>
-      </div>
-      <div className="progress-bar" aria-label="Run progress">
-        <span style={{ width: `${Math.round(progress * 100)}%` }} />
-      </div>
-      <ol className="trace-list">
-        {events.length === 0 ? (
-          <li className="empty">Waiting for the first audit event.</li>
-        ) : (
-          events.map((event, index) => (
-            <li key={`${event.message}-${index}`}>
-              <div className="trace-line">
-                <span>{formatTraceType(event.span?.type ?? event.type)}</span>
-                {event.span?.cost_usd ? <small>${event.span.cost_usd.toFixed(4)}</small> : null}
-              </div>
-              <p>{event.message}</p>
-              {event.span?.input_summary && <code>{event.span.input_summary}</code>}
-              {event.span?.output_summary && <code>{event.span.output_summary}</code>}
-              {event.span?.risk_flags?.length ? (
-                <div className="trace-flags">
-                  {event.span.risk_flags.map((flag) => <em key={flag}>{flag}</em>)}
-                </div>
-              ) : null}
-            </li>
-          ))
-        )}
-      </ol>
-    </section>
-  );
-}
-
-function isRealProvider(provider: ProviderMetadata): boolean {
-  return provider.provider !== "preview" && provider.provider !== "local";
-}
-
-function isProviderConnected(provider: ProviderMetadata): boolean {
-  return provider.key_state === "saved" || provider.key_state === "env";
 }
 
 function formatTraceType(value: string): string {
-  const normalized = value.replaceAll("_", " ");
-  return normalized.toLowerCase() === "causal probe" ? "Tinker probe" : normalized;
-}
-
-interface RunHistoryProps {
-  runs: RunView[];
-  activeRunId: string | null;
-  onSelect: (runId: string) => void;
-  expanded?: boolean;
-}
-
-export function RunHistory({ runs, activeRunId, onSelect }: RunHistoryProps) {
-  return (
-    <section className="panel run-history">
-      <div className="section-heading">
-        <h2>Runs</h2>
-        <p>Completed answer audits and their evidence graphs.</p>
-      </div>
-      <div className="history-list">
-        {runs.length === 0 ? (
-          <p className="empty">No runs yet.</p>
-        ) : (
-          runs.map((run) => (
-            <button
-              className={run.run_id === activeRunId ? "history-row selected" : "history-row"}
-              key={run.run_id}
-              type="button"
-              onClick={() => onSelect(run.run_id)}
-            >
-              <span>{run.status}</span>
-              <strong>{run.question}</strong>
-            </button>
-          ))
-        )}
-      </div>
-    </section>
-  );
+  return value.replaceAll("_", " ");
 }

@@ -14,6 +14,23 @@ Returns service status, database path, and backend version.
 
 Returns supported provider metadata and whether each provider has a saved active key.
 
+`GET /api/provider-preferences`
+
+Returns saved chat defaults and the resolved provider when one is available.
+
+`PUT /api/provider-preferences`
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4.1-mini",
+  "samples": 3,
+  "max_cost_usd": 1.0
+}
+```
+
+Stores default provider settings for new chat messages.
+
 ## Keys
 
 `GET /api/keys`
@@ -40,11 +57,13 @@ Deletes the saved local key for the current user.
 ```json
 {
   "question": "Should I build this product?",
-  "provider": "tinker",
-  "model": "tinker://.../sampler_weights/000080",
+  "provider": "openai",
+  "model": "gpt-4.1-mini",
   "samples": 3,
   "max_cost_usd": 1.0,
-  "use_live_provider": false
+  "use_live_provider": true,
+  "conversation_id": "conv_...",
+  "attachment_document_ids": ["doc_..."]
 }
 ```
 
@@ -64,6 +83,37 @@ Downloads the full Reliability Evidence Graph JSON.
 
 Stores a local user label for later calibration research.
 
+## Conversations
+
+`GET /api/conversations`
+
+Lists chat threads.
+
+`POST /api/conversations`
+
+```json
+{
+  "title": "New chat"
+}
+```
+
+Creates a thread.
+
+`GET /api/conversations/{conversation_id}`
+
+Returns a thread and messages. Assistant messages include the linked run graph when available.
+
+`POST /api/conversations/{conversation_id}/messages`
+
+```json
+{
+  "content": "Can I trust this answer?",
+  "attachment_document_ids": ["doc_..."]
+}
+```
+
+Creates a user message and queued reliability run. Stream `/api/runs/{run_id}/events` to complete the answer.
+
 ## Documents
 
 `GET /api/documents`
@@ -81,7 +131,7 @@ Lists indexed documents and fetched source pages.
 }
 ```
 
-Stores source text, chunks it, builds local retrieval vectors, and makes it available for later claim matching.
+Stores source text, chunks it, builds local retrieval vectors, and returns a document id that can be attached to a chat message.
 
 `POST /api/documents/fetch`
 

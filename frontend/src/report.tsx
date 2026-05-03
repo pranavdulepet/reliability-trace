@@ -10,7 +10,7 @@ export const TABS = [
   "Disagreement",
   "Checks",
   "Calibration",
-  "Tinker Probe",
+  "Perturbation",
   "Export",
 ] as const;
 
@@ -68,7 +68,7 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Disagreement") return <DisagreementTab graph={graph} />;
   if (tab === "Checks") return <StressTab graph={graph} />;
   if (tab === "Calibration") return <CalibrationTab graph={graph} />;
-  if (tab === "Tinker Probe") return <CausalProbeTab graph={graph} />;
+  if (tab === "Perturbation") return <PerturbationTab graph={graph} />;
   return <ExportTab graph={graph} />;
 }
 
@@ -247,15 +247,16 @@ function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
-function CausalProbeTab({ graph }: { graph: ReliabilityGraph }) {
+function PerturbationTab({ graph }: { graph: ReliabilityGraph }) {
+  const probe = graph.perturbation_probe ?? graph.causal_probe;
   return (
     <div>
-      <h3>{formatStatus(graph.causal_probe.mode)}</h3>
-      <p>{graph.causal_probe.reason}</p>
-      {graph.causal_probe.results.length > 0 ? (
+      <h3>{formatStatus(probe.mode)}</h3>
+      <p>{probe.reason}</p>
+      {probe.results.length > 0 ? (
         <Table
           columns={["Operation", "Changed", "Similarity", "Unsupported flip", "Result"]}
-          rows={graph.causal_probe.results.map((result) => [
+          rows={probe.results.map((result) => [
             result.operation,
             result.answer_changed ? "yes" : "no",
             formatNumber(result.similarity_to_baseline),
@@ -264,8 +265,60 @@ function CausalProbeTab({ graph }: { graph: ReliabilityGraph }) {
           ])}
         />
       ) : (
-        <Table columns={["Available operation"]} rows={graph.causal_probe.operations.map((operation) => [operation])} />
+        <Table columns={["Available operation"]} rows={probe.operations.map((operation) => [operation])} />
       )}
+    </div>
+  );
+}
+
+export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
+  return (
+    <div className="reliability-cards">
+      <article>
+        <span>Trust score</span>
+        <strong>{graph.answer.reliability_score}/100</strong>
+        <p>{formatStatus(graph.answer.calibration_status)}</p>
+      </article>
+      <article>
+        <span>Why trust</span>
+        <strong>{graph.answer.top_positive_signals[0] ?? "Evidence checked"}</strong>
+        <p>{graph.answer.top_positive_signals.slice(1).join(" · ")}</p>
+      </article>
+      <article>
+        <span>Main uncertainty</span>
+        <strong>{graph.answer.main_uncertainty}</strong>
+      </article>
+      <article>
+        <span>Sources used</span>
+        <strong>{graph.evidence.length}</strong>
+        <p>{sourceSummary(graph)}</p>
+      </article>
+      <article>
+        <span>What would change it</span>
+        <strong>{graph.answer.what_would_change_the_answer}</strong>
+      </article>
+    </div>
+  );
+}
+
+export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
+  const sections: Array<{ title: ReportTab; defaultOpen?: boolean }> = [
+    { title: "Claims", defaultOpen: true },
+    { title: "Sources" },
+    { title: "Disagreement" },
+    { title: "Checks" },
+    { title: "Calibration" },
+    { title: "Perturbation" },
+    { title: "Export" },
+  ];
+  return (
+    <div className="answer-details">
+      {sections.map((section) => (
+        <details key={section.title} open={section.defaultOpen}>
+          <summary>{section.title}</summary>
+          <div className="detail-panel">{renderTab(section.title, graph)}</div>
+        </details>
+      ))}
     </div>
   );
 }
@@ -318,6 +371,13 @@ function formatProvider(provider: string): string {
 
 function formatStatus(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function sourceSummary(graph: ReliabilityGraph): string {
+  const external = graph.evidence.filter((item) => item.source_type !== "system_trace");
+  if (external.length === 0) return "No attached source strongly matched this answer.";
+  const titles = Array.from(new Set(external.map((item) => item.source_title))).slice(0, 2);
+  return titles.join(" · ");
 }
 
 function scoreLabel(score: number): string {

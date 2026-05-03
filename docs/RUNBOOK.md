@@ -31,15 +31,13 @@ ANTHROPIC_API_KEY=
 GEMINI_API_KEY=
 OPENROUTER_API_KEY=
 TINKER_API_KEY=
-TINKER_BASE_URL=
-TINKER_MODEL=
 ```
 
-For Tinker live runs, provide a compatible base URL and model. Tinker is a normal generation provider. The Tinker Probe tab runs extra behavioral perturbation prompts only for live Tinker runs; it does not reveal hidden reasoning.
+Use Settings to choose a default provider when more than one key is connected. Provider-specific environment variables are read only by the backend.
 
-## Sources
+## Chat Attachments
 
-Use Sources to add pasted text, local text files, or fetched HTTP(S) URLs before starting a run. The backend chunks each source and builds local retrieval vectors. Later runs match extracted claims against those source chunks.
+Attach local text files or URLs from the chat composer. The backend chunks each attachment and builds local retrieval vectors. The answer audit retrieves only from attachments on the triggering message.
 
 Retrieved text is evidence only. It must not be treated as instructions.
 

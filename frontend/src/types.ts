@@ -19,11 +19,15 @@ export interface ProviderKeyView {
 
 export interface RunCreate {
   question: string;
-  provider: string;
-  model: string | null;
-  samples: number;
-  max_cost_usd: number;
-  use_live_provider: boolean;
+  provider?: string | null;
+  model?: string | null;
+  samples?: number;
+  max_cost_usd?: number;
+  use_live_provider?: boolean;
+  conversation_id?: string | null;
+  user_message_id?: string | null;
+  prior_context?: Array<{ role: string; content: string }>;
+  attachment_document_ids?: string[];
 }
 
 export interface RunView extends RunCreate {
@@ -53,6 +57,47 @@ export interface DocumentMatch {
   source_url: string | null;
   source_type: string;
   relevance_score: number;
+}
+
+export interface ProviderPreference {
+  provider: string | null;
+  model: string | null;
+  samples: number;
+  max_cost_usd: number;
+  updated_at: string | null;
+}
+
+export interface ProviderPreferenceResponse {
+  preference: ProviderPreference;
+  resolved: ProviderPreference | null;
+}
+
+export interface ConversationSummary {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface ConversationMessage {
+  message_id: string;
+  conversation_id: string;
+  role: "user" | "assistant";
+  content: string;
+  run_id: string | null;
+  attachment_document_ids: string[];
+  created_at: string;
+  run: {
+    run_id: string;
+    status: string;
+    error: string | null;
+    graph: ReliabilityGraph | null;
+  } | null;
+}
+
+export interface ConversationView extends ConversationSummary {
+  messages: ConversationMessage[];
 }
 
 export interface TraceSpan {
@@ -136,6 +181,8 @@ export interface StressTest {
 export interface ReliabilityGraph {
   run: {
     run_id: string;
+    conversation_id?: string | null;
+    attachment_document_ids?: string[];
     question: string;
     question_type: string;
     provider: string;
@@ -182,7 +229,18 @@ export interface ReliabilityGraph {
     display: string;
     note: string;
   };
-  causal_probe: {
+  perturbation_probe?: PerturbationProbe;
+  causal_probe: PerturbationProbe;
+  features: Record<string, number>;
+  score_caps: string[];
+  export: {
+    format: string;
+    json_ready: boolean;
+    contains_plaintext_provider_keys: boolean;
+  };
+}
+
+export interface PerturbationProbe {
     mode: string;
     available: boolean;
     reason: string;
@@ -194,14 +252,6 @@ export interface ReliabilityGraph {
       unsupported_flip: boolean;
       result: string;
     }>;
-  };
-  features: Record<string, number>;
-  score_caps: string[];
-  export: {
-    format: string;
-    json_ready: boolean;
-    contains_plaintext_provider_keys: boolean;
-  };
 }
 
 export interface StreamEvent {

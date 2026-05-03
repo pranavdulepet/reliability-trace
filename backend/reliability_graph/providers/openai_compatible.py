@@ -96,12 +96,23 @@ class OpenAICompatibleProvider(ModelProvider):
         )
 
     def _prompt(self, messages: List[ModelMessage]) -> str:
-        lines = []
-        for message in messages:
-            role = "Assistant" if message.role == "assistant" else "User" if message.role == "user" else "System"
-            lines.append("%s: %s" % (role, message.content))
-        lines.append("Assistant:")
-        return "\n\n".join(lines)
+        system = [message.content for message in messages if message.role == "system"]
+        turns = [message for message in messages if message.role != "system"]
+        sections = []
+        if system:
+            sections.append("### Instructions\n" + "\n\n".join(system))
+        if turns:
+            conversation = []
+            for message in turns[:-1]:
+                role = "Assistant" if message.role == "assistant" else "User"
+                conversation.append("%s: %s" % (role, message.content))
+            if conversation:
+                sections.append("### Conversation\n" + "\n\n".join(conversation))
+            final = turns[-1]
+            final_label = "Assistant" if final.role == "assistant" else "User"
+            sections.append("### %s\n%s" % (final_label, final.content))
+        sections.append("### Answer\n")
+        return "\n\n".join(sections)
 
 
 def openai_provider(api_key: str) -> OpenAICompatibleProvider:
@@ -134,6 +145,6 @@ def tinker_provider(api_key: str) -> OpenAICompatibleProvider:
             "TINKER_BASE_URL",
             "https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
         ),
-        default_model=os.getenv("TINKER_MODEL", "meta-llama/Llama-3.2-1B"),
-        use_completions=os.getenv("TINKER_ENDPOINT", "completions") == "completions",
+        default_model=os.getenv("TINKER_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+        use_completions=os.getenv("TINKER_ENDPOINT", "chat") == "completions",
     )

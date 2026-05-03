@@ -2,6 +2,8 @@ import asyncio
 import json
 
 from backend.reliability_graph.pipeline import ReliabilityPipeline
+from backend.reliability_graph.providers.base import ModelMessage
+from backend.reliability_graph.providers.openai_compatible import OpenAICompatibleProvider
 from backend.reliability_graph.retrieval import build_chunks
 
 
@@ -101,3 +103,30 @@ def test_pipeline_requires_provider_key_for_perturbation_probe():
 
     assert graph["perturbation_probe"]["available"] is False
     assert graph["perturbation_probe"]["mode"] == "missing_key"
+
+
+def test_completion_provider_prompt_has_clear_answer_boundary():
+    provider = OpenAICompatibleProvider(
+        name="provider",
+        api_key="not-used",
+        base_url="https://example.test",
+        default_model="model",
+        use_completions=True,
+    )
+
+    prompt = provider._prompt(
+        [
+            ModelMessage(role="system", content="Answer directly."),
+            ModelMessage(role="user", content="What is 2+2?"),
+        ]
+    )
+
+    assert prompt == "### Instructions\nAnswer directly.\n\n### User\nWhat is 2+2?\n\n### Answer\n"
+
+
+def test_model_text_cleanup_removes_echoed_prompt_sections():
+    pipeline = ReliabilityPipeline()
+
+    cleaned = pipeline._clean_model_text("### Answer\nA direct answer.\n\n### User\nEchoed prompt")
+
+    assert cleaned == "A direct answer."

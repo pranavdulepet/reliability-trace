@@ -1,4 +1,15 @@
-import type { DocumentMatch, DocumentView, ProviderKeyView, ProviderMetadata, RunCreate, RunView } from "./types";
+import type {
+  ConversationMessage,
+  ConversationSummary,
+  ConversationView,
+  DocumentMatch,
+  DocumentView,
+  ProviderKeyView,
+  ProviderMetadata,
+  ProviderPreferenceResponse,
+  RunCreate,
+  RunView,
+} from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -38,6 +49,22 @@ export async function deleteKey(provider: string): Promise<void> {
   await request<{ deleted: boolean }>(`/api/keys/${provider}`, { method: "DELETE" });
 }
 
+export async function getProviderPreference(): Promise<ProviderPreferenceResponse> {
+  return request<ProviderPreferenceResponse>("/api/provider-preferences");
+}
+
+export async function saveProviderPreference(payload: {
+  provider: string | null;
+  model: string | null;
+  samples: number;
+  max_cost_usd: number;
+}): Promise<ProviderPreferenceResponse> {
+  return request<ProviderPreferenceResponse>("/api/provider-preferences", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function createRun(payload: RunCreate): Promise<RunView> {
   return request<RunView>("/api/runs", {
     method: "POST",
@@ -52,6 +79,35 @@ export async function getRuns(): Promise<RunView[]> {
 
 export async function getRun(runId: string): Promise<RunView> {
   return request<RunView>(`/api/runs/${runId}`);
+}
+
+export async function getConversations(): Promise<ConversationSummary[]> {
+  const data = await request<{ conversations: ConversationSummary[] }>("/api/conversations");
+  return data.conversations;
+}
+
+export async function createConversation(title?: string): Promise<ConversationView> {
+  return request<ConversationView>("/api/conversations", {
+    method: "POST",
+    body: JSON.stringify({ title: title ?? null }),
+  });
+}
+
+export async function getConversation(conversationId: string): Promise<ConversationView> {
+  return request<ConversationView>(`/api/conversations/${conversationId}`);
+}
+
+export async function sendConversationMessage(
+  conversationId: string,
+  payload: {
+    content: string;
+    attachment_document_ids: string[];
+  },
+): Promise<{ message: ConversationMessage; run: RunView }> {
+  return request<{ message: ConversationMessage; run: RunView }>(`/api/conversations/${conversationId}/messages`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function getDocuments(): Promise<DocumentView[]> {

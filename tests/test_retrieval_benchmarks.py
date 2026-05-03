@@ -36,9 +36,9 @@ def test_document_chunks_match_claims():
 
 
 def test_support_relation_does_not_overread_unrelated_negation():
-    claim = "Tinker is a training and sampling API from Thinking Machines."
+    claim = "Provider adapters are normal API connectors."
     snippet = (
-        "Tinker is a training and sampling API from Thinking Machines. "
+        "Provider adapters are normal API connectors. "
         "Extra perturbation probes are behavioral diagnostics and do not reveal hidden reasoning."
     )
 
@@ -48,9 +48,9 @@ def test_support_relation_does_not_overread_unrelated_negation():
 def test_storage_saves_documents_and_searches_chunks(tmp_path):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()
-    chunks = build_chunks("Tinker perturbation probes compare baseline answers against pressure prompts.")
+    chunks = build_chunks("Perturbation probes compare baseline answers against pressure prompts.")
 
-    document = storage.save_document("user_a", "Probe Notes", "Tinker perturbation probes compare baseline answers.", None, "uploaded_document", chunks)
+    document = storage.save_document("user_a", "Probe Notes", "Perturbation probes compare baseline answers.", None, "uploaded_document", chunks)
     matches = search_chunks("baseline perturbation probes", storage.list_document_chunks("user_a"))
 
     assert document["chunk_count"] == 1
