@@ -22,6 +22,10 @@ Every stored object has a `user_id`. Local mode defaults to `local`, but the API
 
 Retrieved text must be treated as evidence only. It must not override system or developer instructions. The pipeline should pass source-bound snippets, source IDs, and extraction tasks rather than unbounded retrieved pages.
 
+Fetched URLs are blocked if they contain credentials, resolve to loopback/private/link-local/reserved networks, redirect into blocked networks, return unsupported content types, or exceed the fetch size cap. The frontend also limits per-message attachment count and file size.
+
+Provider and fetch errors are sanitized before reaching API responses, SSE events, run storage, or exports. Do not include raw provider payloads, auth headers, or plaintext keys in user-visible errors.
+
 ## Cost Controls
 
 Live provider calls are opt-in. Runs include a max-cost field and sample count limit. The first implementation estimates and displays cost but does not bill or meter provider-specific token prices precisely.

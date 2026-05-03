@@ -73,6 +73,7 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
 }
 
 function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
+  const meta = answerMeta(graph);
   return (
     <div className="summary-layout">
       <section className="score-summary">
@@ -81,8 +82,8 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
           <span>/100</span>
         </div>
         <div>
-          <h3>Reliability is {scoreLabel(graph.answer.reliability_score).toLowerCase()}</h3>
-          <p>{graph.answer.summary}</p>
+          <h3>{meta.verdictLabel}</h3>
+          <p>{meta.reason}</p>
         </div>
       </section>
       <section className="answer-main">
@@ -95,9 +96,9 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
           </>
         )}
         <h3>Main Uncertainty</h3>
-        <p>{graph.answer.main_uncertainty}</p>
+        <p>{meta.uncertainty}</p>
         <h3>What Would Change The Answer</h3>
-        <p>{graph.answer.what_would_change_the_answer}</p>
+        <p>{meta.change}</p>
       </section>
       <aside className="signal-panel">
         <h3>Trust Signals</h3>
@@ -105,7 +106,7 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
         <h3>Risk Signals</h3>
         <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
         <h3>Recommended Action</h3>
-        <p>{graph.answer.recommended_user_action}</p>
+        <p>{meta.nextAction}</p>
       </aside>
     </div>
   );
@@ -115,16 +116,16 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
   const assessments = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
   return (
     <Table
-      columns={["Claim", "Type", "Importance", "Checkability", "Assessment", "Evidence"]}
+      columns={["Claim", "Type", "Importance", "Relation", "Why", "Source limit"]}
       rows={graph.claims.map((claim) => {
         const assessment = assessments.get(claim.claim_id);
         return [
           claim.text,
           claim.type,
           claim.importance,
-          claim.checkability,
-          assessment?.status ?? "unassessed",
-          String(assessment?.evidence_ids.length ?? 0),
+          assessment?.relation ?? assessment?.status ?? "unassessed",
+          assessment?.why ?? assessment?.explanation ?? "",
+          assessment?.source_limit ?? `${assessment?.evidence_ids.length ?? 0} matched evidence item(s)`,
         ];
       })}
     />
@@ -132,10 +133,14 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
 }
 
 function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {
+  const evidence = externalEvidence(graph);
+  if (evidence.length === 0) {
+    return <p className="empty-state">No attached or fetched source supports these claims yet.</p>;
+  }
   return (
     <Table
       columns={["Source", "Type", "Date", "Quality", "Relation", "Snippet"]}
-      rows={graph.evidence.map((item: EvidenceItem) => [
+      rows={evidence.map((item: EvidenceItem) => [
         item.source_title,
         item.source_type,
         item.source_date ?? "not dated",
@@ -243,6 +248,15 @@ function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
           <ul>{graph.score_caps.map((cap) => <li key={cap}>{cap}</li>)}</ul>
         </>
       )}
+      {graph.analysis_basis && graph.analysis_basis.length > 0 && (
+        <>
+          <h3>Analysis Basis</h3>
+          <Table
+            columns={["Signal", "Method", "Research", "Limit"]}
+            rows={graph.analysis_basis.map((item) => [item.signal, item.method, item.research_lineage, item.limitation])}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -272,30 +286,26 @@ function PerturbationTab({ graph }: { graph: ReliabilityGraph }) {
 }
 
 export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
+  const meta = answerMeta(graph);
   return (
     <div className="reliability-cards">
-      <article>
-        <span>Trust score</span>
-        <strong>{graph.answer.reliability_score}/100</strong>
-        <p>{formatStatus(graph.answer.calibration_status)}</p>
+      <article className={`verdict-card verdict-${meta.verdict}`}>
+        <span>Can I trust this?</span>
+        <strong>{meta.verdictLabel}</strong>
+        <p>{meta.score}/100 · {formatStatus(graph.answer.calibration_status)}</p>
       </article>
       <article>
-        <span>Why trust</span>
-        <strong>{graph.answer.top_positive_signals[0] ?? "Evidence checked"}</strong>
-        <p>{graph.answer.top_positive_signals.slice(1).join(" · ")}</p>
-      </article>
-      <article>
-        <span>Main uncertainty</span>
-        <strong>{graph.answer.main_uncertainty}</strong>
-      </article>
-      <article>
-        <span>Sources used</span>
-        <strong>{graph.evidence.length}</strong>
+        <span>Evidence</span>
+        <strong>{meta.evidenceStatus}</strong>
         <p>{sourceSummary(graph)}</p>
       </article>
       <article>
-        <span>What would change it</span>
-        <strong>{graph.answer.what_would_change_the_answer}</strong>
+        <span>Main uncertainty</span>
+        <strong>{meta.uncertainty}</strong>
+      </article>
+      <article>
+        <span>Next action</span>
+        <strong>{meta.nextAction}</strong>
       </article>
     </div>
   );
@@ -303,7 +313,7 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
 
 export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
   const sections: Array<{ title: ReportTab; defaultOpen?: boolean }> = [
-    { title: "Claims", defaultOpen: true },
+    { title: "Claims" },
     { title: "Sources" },
     { title: "Disagreement" },
     { title: "Checks" },
@@ -374,14 +384,49 @@ function formatStatus(value: string): string {
 }
 
 function sourceSummary(graph: ReliabilityGraph): string {
-  const external = graph.evidence.filter((item) => item.source_type !== "system_trace");
-  if (external.length === 0) return "No attached source strongly matched this answer.";
+  const external = externalEvidence(graph);
+  if (external.length === 0) return graph.answer.source_limitations ?? "No attached or fetched source supports this answer.";
   const titles = Array.from(new Set(external.map((item) => item.source_title))).slice(0, 2);
-  return titles.join(" · ");
+  const extra = external.length > titles.length ? ` + ${external.length - titles.length} more` : "";
+  return `${external.length} source match${external.length === 1 ? "" : "es"} · ${titles.join(" · ")}${extra}`;
 }
 
-function scoreLabel(score: number): string {
-  if (score >= 80) return "Strong";
-  if (score >= 60) return "Moderate";
-  return "Limited";
+function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {
+  return graph.evidence.filter((item) => item.source_type !== "system_trace" && item.source_type !== "internal_policy");
+}
+
+function answerMeta(graph: ReliabilityGraph) {
+  const score = graph.answer.reliability_score;
+  const verdict = graph.answer.verdict ?? fallbackVerdict(score, graph);
+  return {
+    score,
+    verdict,
+    verdictLabel: verdictLabel(verdict),
+    reason: graph.answer.verdict_reason ?? graph.answer.summary,
+    evidenceStatus: graph.answer.evidence_status ?? fallbackEvidenceStatus(graph),
+    uncertainty: graph.answer.main_uncertainty,
+    change: graph.answer.what_would_change_the_answer,
+    nextAction: graph.answer.next_best_action ?? graph.answer.recommended_user_action,
+  };
+}
+
+function fallbackVerdict(score: number, graph: ReliabilityGraph): "rely" | "use_with_caution" | "do_not_rely" {
+  const hasContradiction = graph.claim_assessments.some((item) => item.status === "contradicted" || item.relation === "contradicted");
+  if (hasContradiction || score < 45) return "do_not_rely";
+  if (score >= 75 && externalEvidence(graph).length > 0) return "rely";
+  return "use_with_caution";
+}
+
+function verdictLabel(verdict: "rely" | "use_with_caution" | "do_not_rely"): string {
+  if (verdict === "rely") return "Rely";
+  if (verdict === "do_not_rely") return "Do not rely";
+  return "Use with caution";
+}
+
+function fallbackEvidenceStatus(graph: ReliabilityGraph): string {
+  if (externalEvidence(graph).length === 0) return "No attached or fetched source supports this answer.";
+  if (graph.claim_assessments.some((item) => item.status === "contradicted" || item.relation === "contradicted")) {
+    return "Sources contradict at least one checked claim.";
+  }
+  return "Sources were checked against extracted claims.";
 }

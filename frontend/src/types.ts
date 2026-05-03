@@ -145,8 +145,11 @@ export interface EvidenceItem {
 export interface ClaimAssessment {
   claim_id: string;
   status: string;
+  relation?: "supported" | "partially_supported" | "contradicted" | "not_found";
   support_score: number;
   explanation: string;
+  why?: string;
+  source_limit?: string;
   evidence_ids: string[];
 }
 
@@ -197,6 +200,11 @@ export interface ReliabilityGraph {
     recommendation: string | null;
     reliability_score: number;
     calibration_status: string;
+    verdict?: "rely" | "use_with_caution" | "do_not_rely";
+    verdict_reason?: string;
+    next_best_action?: string;
+    evidence_status?: string;
+    source_limitations?: string;
     top_positive_signals: string[];
     top_negative_signals: string[];
     main_uncertainty: string;
@@ -233,6 +241,12 @@ export interface ReliabilityGraph {
   causal_probe: PerturbationProbe;
   features: Record<string, number>;
   score_caps: string[];
+  analysis_basis?: Array<{
+    signal: string;
+    method: string;
+    research_lineage: string;
+    limitation: string;
+  }>;
   export: {
     format: string;
     json_ready: boolean;

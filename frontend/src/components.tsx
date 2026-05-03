@@ -6,6 +6,7 @@ import type {
   ProviderMetadata,
   ProviderPreferenceResponse,
   StreamEvent,
+  TraceSpan,
 } from "./types";
 
 interface ConversationListProps {
@@ -27,6 +28,7 @@ export function ConversationList({
   onOpenAbout,
   onOpenSettings,
 }: ConversationListProps) {
+  const visibleConversations = conversations.slice(0, 50);
   return (
     <aside className="conversation-rail">
       <div className="brand-block">
@@ -40,7 +42,7 @@ export function ConversationList({
         {conversations.length === 0 ? (
           <p className="empty">No conversations yet.</p>
         ) : (
-          conversations.map((conversation) => (
+          visibleConversations.map((conversation) => (
             <button
               className={conversation.conversation_id === activeConversationId && view === "chat" ? "conversation-item active" : "conversation-item"}
               key={conversation.conversation_id}
@@ -51,6 +53,9 @@ export function ConversationList({
               <small>{conversation.message_count} messages</small>
             </button>
           ))
+        )}
+        {conversations.length > visibleConversations.length && (
+          <p className="rail-note">Showing latest {visibleConversations.length} chats.</p>
         )}
       </nav>
       <div className="rail-footer">
@@ -99,7 +104,13 @@ export function ChatComposer({
       {attachments.length > 0 && (
         <div className="attachment-row">
           {attachments.map((attachment) => (
-            <button className={`attachment-chip status-${attachment.status}`} key={attachment.id} type="button" onClick={() => onRemoveAttachment(attachment.id)}>
+            <button
+              className={`attachment-chip status-${attachment.status}`}
+              key={attachment.id}
+              title={attachment.error ?? attachment.title}
+              type="button"
+              onClick={() => onRemoveAttachment(attachment.id)}
+            >
               <span>{attachment.kind === "file" ? "File" : "URL"}</span>
               {attachment.title}
             </button>
@@ -184,7 +195,7 @@ export function ActivityTrace({
             <li key={`${event.message}-${index}`}>
               <strong>{formatTraceType(event.span?.type ?? event.type)}</strong>
               <p>{event.message}</p>
-              {event.span?.output_summary && <code>{event.span.output_summary}</code>}
+              {event.span?.output_summary && <small>{formatTraceOutput(event.span)}</small>}
             </li>
           ))
         )}
@@ -338,4 +349,53 @@ export function ProviderSettings({
 
 function formatTraceType(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+export function formatTraceOutput(span: TraceSpan): string {
+  const parsed = parseOutput(span.output_summary);
+  if (!parsed) return span.output_summary;
+  if (span.type === "candidate_generation") {
+    const count = parsed.candidate_count ?? 0;
+    return parsed.provider_error ? `${count} candidates generated; provider recovered from an issue.` : `${count} candidates generated.`;
+  }
+  if (span.type === "semantic_clustering") {
+    return `${parsed.cluster_count ?? 0} meaning cluster${parsed.cluster_count === 1 ? "" : "s"}; stability ${formatMetric(parsed.semantic_stability)}.`;
+  }
+  if (span.type === "claim_extraction") {
+    return `${parsed.claim_count ?? 0} checked claim${parsed.claim_count === 1 ? "" : "s"} extracted${parsed.structured ? " with structured output" : ""}.`;
+  }
+  if (span.type === "evidence_retrieval") {
+    return `${parsed.evidence_count ?? 0} source match${parsed.evidence_count === 1 ? "" : "es"} from ${parsed.source_chunk_count ?? 0} attachment chunk${parsed.source_chunk_count === 1 ? "" : "s"}.`;
+  }
+  if (span.type === "claim_check") {
+    return `${parsed.assessed_claims ?? 0} claim${parsed.assessed_claims === 1 ? "" : "s"} checked against available evidence.`;
+  }
+  if (span.type === "stress_test") {
+    return `Unsupported flip rate ${formatMetric(parsed.unsupported_flip_rate)}.`;
+  }
+  if (span.type === "reliability_scoring") {
+    const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";
+    return `Diagnostic score ${parsed.score ?? "n/a"}/100.${caps}`;
+  }
+  if (span.type === "calibration_lookup") {
+    return `Calibration: ${String(parsed.calibration_status ?? "unknown").replaceAll("_", " ")}.`;
+  }
+  if (span.type === "perturbation_probe") {
+    return `Robustness checks: ${String(parsed.mode ?? "unknown").replaceAll("_", " ")}.`;
+  }
+  const entries = Object.entries(parsed).slice(0, 3);
+  return entries.map(([key, value]) => `${key.replaceAll("_", " ")}: ${String(value)}`).join(" · ");
+}
+
+function parseOutput(value: string): Record<string, any> | null {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatMetric(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "n/a";
 }

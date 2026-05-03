@@ -1,61 +1,26 @@
-# ReliabilityGraph Benchmark Report
+# Research Basis
 
-This is the research artifact skeleton. Keep product UI separate from benchmark claims.
+ReliabilityGraph uses research signals as diagnostics, not as proof that an answer is true.
 
-## 1. Motivation
+## Signals
 
-Measure whether the full Reliability Evidence Graph predicts answer correctness or decision usefulness better than any single signal.
+- `atomic_claim_support`: Inspired by FActScore and SAFE / LongFact. The pipeline decomposes the answer into checkable claims and matches each claim to attached or fetched source chunks. Limitation: local retrieval can miss paraphrases, context, and source quality nuance.
+- `sample_consistency`: Inspired by SelfCheckGPT. Multiple samples are compared for answer stability. Limitation: models can agree on the same false claim.
+- `semantic_entropy`: Inspired by semantic entropy work. The system tracks meaning-level disagreement instead of treating every wording difference as important. Limitation: the current local clustering is lightweight and should be calibrated with labels.
+- `perturbation_check`: Behavioral pressure prompts test whether the answer flips under paraphrase, false-premise, or authority pressure. Limitation: this is observable behavior only, not access to hidden reasoning.
+- `calibration`: Inspired by reliability diagrams, ECE, and Brier score. User-labeled runs produce a local calibration report. Limitation: scores remain diagnostic until labels cover the actual workload.
+- `unfaithful_cot_guardrail`: Inspired by work showing chain-of-thought can be unfaithful. The UI shows observable steps, calls, outputs, checks, and scores; it does not promise hidden model reasoning traces.
 
-## 2. System
+## Benchmark Direction
 
-Signals under test:
+Use `scripts/smoke_usecases.py` for fast product smoke coverage. Larger benchmark work should compare the full graph against baselines:
 
-- claim support
-- semantic stability
-- source quality
-- disagreement
-- stress-test flips
-- decision sensitivity
-- judge rubric scores
-- trace completeness
-
-## 3. Benchmarks
-
-- SimpleQA
-- TruthfulQA
-- FreshQA
-- LongFact / SAFE-style tasks
-- RAGTruth
-- custom general-QA set
-- custom decision-QA set
-- user-labeled real runs
-
-## 4. Baselines
-
-- single model answer
-- single model answer with citations
-- verbalized confidence
+- single answer
+- single answer with citations
+- verbal confidence
 - LLM judge only
 - model agreement only
 - semantic entropy only
-- SelfCheck-style consistency only
 - claim support only
-- full ReliabilityGraph
 
-## 5. Metrics
-
-- answer accuracy
-- claim-level support precision
-- contradiction detection
-- unsupported-claim detection
-- ECE
-- Brier score
-- risk-coverage
-- sycophancy flip rate
-- false-premise acceptance rate
-- assumption recall
-- decision usefulness rating
-
-## 6. Status
-
-The product now builds a local calibration report from user-labeled completed runs. Scores remain diagnostic until labels cover the target workload with enough diversity for stable calibration.
+Metrics to preserve: answer accuracy, claim support precision, contradiction detection, unsupported-claim detection, ECE, Brier score, risk coverage, false-premise acceptance, and decision usefulness.

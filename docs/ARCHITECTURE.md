@@ -21,6 +21,17 @@ The backend exposes REST endpoints for keys, provider preferences, conversations
 
 SQLite is the local storage target because it keeps setup small. The storage layer is deliberately isolated so hosted mode can move to Postgres without changing the frontend contract. Documents and fetched pages are chunked and embedded with local hashed vectors. Chat retrieval is scoped to the files and URLs attached to the triggering message.
 
+URL fetch rejects credentials, loopback/private/link-local hosts, unsafe redirects, unsupported content types, and oversized responses. Duplicate documents are reused by URL or content hash.
+
+The pipeline emits provider-neutral verdict fields on every completed graph:
+
+- `answer.verdict`: `rely`, `use_with_caution`, or `do_not_rely`
+- `answer.evidence_status`
+- `answer.main_uncertainty`
+- `answer.next_best_action`
+- `claim_assessments[].relation`
+- `analysis_basis[]`
+
 ## Frontend
 
 The frontend is a React + TypeScript app. It presents:
@@ -32,6 +43,8 @@ The frontend is a React + TypeScript app. It presents:
 - Collapsible activity for provider calls, retrieval, checks, probes, and scoring.
 - About page with the research basis and trace limits.
 - Answer-integrated reliability cards and expandable details for claims, sources, disagreement, checks, calibration, perturbation, and export.
+
+The primary answer view is progressive: answer first, compact trust row second, detailed evidence tables only inside expandable sections.
 
 ## Provider Boundary
 

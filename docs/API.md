@@ -41,8 +41,8 @@ Lists encrypted saved key fingerprints.
 
 ```json
 {
-  "provider": "tinker",
-  "api_key": "tk-..."
+  "provider": "openai",
+  "api_key": "sk-..."
 }
 ```
 

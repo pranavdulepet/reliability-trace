@@ -148,6 +148,12 @@ button:disabled {
   font-size: 0.72rem;
 }
 
+.rail-note {
+  color: var(--muted);
+  font-size: 0.74rem;
+  margin: 6px 8px;
+}
+
 .rail-footer {
   display: grid;
   gap: 5px;
@@ -421,6 +427,13 @@ button:disabled {
   margin: 3px 0 0;
 }
 
+.activity-box small {
+  color: var(--muted);
+  display: block;
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
 .activity-box code,
 .export-panel pre {
   background: #101311;
@@ -440,7 +453,7 @@ button:disabled {
 .reliability-cards {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin-top: 16px;
 }
 
@@ -463,6 +476,18 @@ button:disabled {
   font-size: 0.92rem;
   line-height: 1.35;
   margin-top: 6px;
+}
+
+.verdict-card {
+  border-left: 4px solid var(--accent);
+}
+
+.verdict-use_with_caution {
+  border-left-color: var(--amber);
+}
+
+.verdict-do_not_rely {
+  border-left-color: var(--red);
 }
 
 .answer-details {

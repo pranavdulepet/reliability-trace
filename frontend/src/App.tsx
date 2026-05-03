@@ -15,7 +15,7 @@ import {
   sendConversationMessage,
   uploadDocument,
 } from "./api";
-import { ActivityTrace, ChatComposer, ConversationList, KeyManager, ProviderSettings } from "./components";
+import { ActivityTrace, ChatComposer, ConversationList, KeyManager, ProviderSettings, formatTraceOutput } from "./components";
 import { ReliabilityCards, ReliabilityDetails } from "./report";
 import type {
   ConversationMessage,
@@ -31,6 +31,9 @@ import type {
 import "./styles.css";
 
 type View = "chat" | "settings" | "about";
+const MAX_ATTACHMENTS = 6;
+const MAX_FILE_BYTES = 1_000_000;
+const MAX_URL_LENGTH = 2000;
 
 export interface DraftAttachment {
   id: string;
@@ -52,7 +55,7 @@ function App() {
   const [conversation, setConversation] = useState<ConversationView | null>(null);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
-  const [keyProvider, setKeyProvider] = useState("tinker");
+  const [keyProvider, setKeyProvider] = useState("");
   const [keyValue, setKeyValue] = useState("");
   const [view, setView] = useState<View>("chat");
   const [events, setEvents] = useState<StreamEvent[]>([]);
@@ -90,7 +93,7 @@ function App() {
     setConversations(nextConversations);
     setKeyProvider((current) => {
       if (nextProviders.some((provider) => provider.provider === current && isRealProvider(provider))) return current;
-      return nextProviders.find((provider) => provider.provider === "tinker")?.provider ?? current;
+      return nextProviders.find(isRealProvider)?.provider ?? current;
     });
   }
 
@@ -151,8 +154,21 @@ function App() {
 
   async function handleAddFiles(files: FileList | null) {
     if (!files) return;
+    setError(null);
+    const remaining = Math.max(0, MAX_ATTACHMENTS - attachments.length);
+    const accepted = Array.from(files).slice(0, remaining).filter((file) => {
+      if (file.size > MAX_FILE_BYTES) {
+        setError(`${file.name} is larger than the 1 MB attachment limit.`);
+        return false;
+      }
+      return true;
+    });
+    if (accepted.length === 0) {
+      if (remaining === 0) setError(`Use at most ${MAX_ATTACHMENTS} attachments per message.`);
+      return;
+    }
     const additions = await Promise.all(
-      Array.from(files).map(async (file) => ({
+      accepted.map(async (file) => ({
         id: makeId("file"),
         kind: "file" as const,
         title: file.name,
@@ -166,6 +182,29 @@ function App() {
   function handleAddUrl(url: string) {
     const trimmed = url.trim();
     if (!trimmed) return;
+    setError(null);
+    if (attachments.length >= MAX_ATTACHMENTS) {
+      setError(`Use at most ${MAX_ATTACHMENTS} attachments per message.`);
+      return;
+    }
+    if (trimmed.length > MAX_URL_LENGTH) {
+      setError("URL is too long.");
+      return;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        setError("Only http and https URLs can be attached.");
+        return;
+      }
+      if (parsed.username || parsed.password) {
+        setError("URLs with credentials cannot be attached.");
+        return;
+      }
+    } catch {
+      setError("Enter a valid URL.");
+      return;
+    }
     setAttachments((current) => [
       ...current,
       {
@@ -446,7 +485,7 @@ function GraphActivity({ graph }: { graph: ReliabilityGraph }) {
             <li key={span.span_id}>
               <strong>{formatTraceType(span.type)}</strong>
               <p>{span.input_summary}</p>
-              {span.output_summary && <code>{span.output_summary}</code>}
+              {span.output_summary && <small>{formatTraceOutput(span)}</small>}
             </li>
           ))
         )}
