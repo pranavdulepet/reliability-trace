@@ -29,6 +29,7 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 - Graph pipeline: `backend/reliability_graph/pipeline`
 - Retrieval: `backend/reliability_graph/retrieval.py`
 - Benchmark report: `backend/reliability_graph/benchmarks.py`
+- External eval harness: `backend/reliability_graph/evals.py` and `scripts/run_reliability_evals.py`
 - Frontend app: `frontend/src/App.tsx`
 - Frontend reliability rendering: `frontend/src/report.tsx`
 - Sample-usecase smoke harness: `scripts/smoke_usecases.py`

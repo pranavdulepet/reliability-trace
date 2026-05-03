@@ -32,6 +32,7 @@ cd frontend && npm run build
 ## Current Shape
 
 - `backend/reliability_graph`: FastAPI API, SQLite storage, encrypted key vault, source retrieval, benchmark reporting, provider adapters, reliability graph pipeline.
+- `scripts/run_reliability_evals.py`: external benchmark pilot harness for RAGTruth, SelfCheckGPT WikiBio, and SimpleQA.
 - `frontend/src`: React + TypeScript chat UI for provider settings, message attachments, SSE activity streaming, answer-integrated reliability cards, details, and JSON export.
 - `docs`: short architecture and operating docs written for both engineers and AI coding assistants.
 - `tests`: direct tests for scoring, encryption, provider safety, retrieval, benchmark reporting, and graph generation.
