@@ -8,13 +8,13 @@ ReliabilityGraph has two evaluation paths:
 ## Run
 
 ```bash
-python3 scripts/run_reliability_evals.py --benchmark all --mode dev --limit 50 --seed 7 --offline
+python scripts/run_reliability_evals.py --benchmark all --mode dev --limit 50 --seed 7 --offline
 ```
 
 Use a live provider slice only when you want end-to-end behavior:
 
 ```bash
-python3 scripts/run_reliability_evals.py --benchmark simpleqa --mode dev --max-live 10 --live-provider tinker
+python scripts/run_reliability_evals.py --benchmark simpleqa --mode dev --max-live 10 --live-provider tinker
 ```
 
 The script never prints API keys. Outputs are written to:

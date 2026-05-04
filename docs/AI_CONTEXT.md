@@ -23,6 +23,7 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 
 ## Main Code Paths
 
+- Runtime: Python 3.14 (`pyproject.toml`, `.python-version`, and backend Docker image).
 - API boundary: `backend/reliability_graph/api.py`
 - Local database: `backend/reliability_graph/storage.py`
 - Key encryption: `backend/reliability_graph/secrets.py`

@@ -422,7 +422,11 @@ async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document
         return pre_trace, retrieval_document_ids, web_search
 
     try:
-        result = await asyncio.to_thread(search_tavily, api_key, route.query or run["question"], preference["max_results"], route.recency)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: search_tavily(api_key, route.query or run["question"], preference["max_results"], route.recency),
+        )
         documents = _index_web_search_results(result["results"])
         retrieval_document_ids.extend([document["document_id"] for document in documents])
         call = {

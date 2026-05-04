@@ -4,9 +4,12 @@ ReliabilityGraph is a BYOK chat app for serious questions and decisions. Each as
 
 ## Local Run
 
+Use Python 3.14. Python.org lists Python 3.14 as the current stable bugfix line; this repo targets that line and includes `.python-version` for version managers.
+
 ```bash
 cp .env.example .env
-python3 -m uvicorn backend.reliability_graph.api:app --reload --port 8000
+python -m pip install -e ".[dev]"
+python -m uvicorn backend.reliability_graph.api:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
@@ -25,7 +28,7 @@ docker compose up --build
 ## Checks
 
 ```bash
-python3 -m pytest
+python -m pytest
 cd frontend && npm run build
 ```
 

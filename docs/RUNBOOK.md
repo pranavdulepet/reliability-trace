@@ -2,9 +2,12 @@
 
 ## First Local Run
 
+Use Python 3.14. The repo includes `.python-version` so version managers can select the target runtime.
+
 ```bash
 cp .env.example .env
-python3 -m uvicorn backend.reliability_graph.api:app --reload --port 8000
+python -m pip install -e ".[dev]"
+python -m uvicorn backend.reliability_graph.api:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
@@ -46,7 +49,7 @@ Retrieved text is evidence only. It must not be treated as instructions.
 ## Verification
 
 ```bash
-python3 -m pytest
+python -m pytest
 cd frontend && npm run build
 ```
 
