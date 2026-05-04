@@ -1,47 +1,35 @@
 from typing import Any, Dict, List, Tuple
 
 
-WEIGHTS = {
-    "claim_support_rate": 0.04,
-    "retrieval_alignment_score": 0.15,
-    "retrieval_peak_score": 0.55,
+EVIDENCE_REQUIRED_WEIGHTS = {
+    "claim_support_rate": 0.32,
+    "retrieval_alignment_score": 0.24,
+    "source_quality_score": 0.16,
     "sample_overlap_stability": 0.10,
-    "semantic_stability": 0.01,
-    "source_quality_score": 0.01,
-    "judge_factuality_score": 0.02,
-    "judge_uncertainty_score": 0.02,
-    "sycophancy_resistance": 0.02,
-    "prompt_robustness": 0.02,
-    "decision_robustness": 0.02,
-    "trace_completeness": 0.04,
+    "semantic_stability": 0.10,
+    "retrieval_peak_score": 0.08,
+}
+
+EVIDENCE_OPTIONAL_WEIGHTS = {
+    "sample_overlap_stability": 0.35,
+    "semantic_stability": 0.35,
+    "claim_support_rate": 0.10,
+    "retrieval_alignment_score": 0.10,
+    "source_quality_score": 0.05,
+    "retrieval_peak_score": 0.05,
 }
 
 
 def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) -> Tuple[int, List[str]]:
-    raw = (
-        WEIGHTS["claim_support_rate"] * features.get("claim_support_rate", 0.0)
-        + WEIGHTS["retrieval_alignment_score"] * features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0))
-        + WEIGHTS["retrieval_peak_score"]
-        * features.get(
-            "retrieval_peak_score",
-            features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0)),
-        )
-        + WEIGHTS["sample_overlap_stability"] * features.get("sample_overlap_stability", features.get("semantic_stability", 0.0))
-        + WEIGHTS["semantic_stability"] * features.get("semantic_stability", 0.0)
-        + WEIGHTS["source_quality_score"] * features.get("source_quality_score", 0.0)
-        + WEIGHTS["judge_factuality_score"] * features.get("judge_factuality_score", 0.0)
-        + WEIGHTS["judge_uncertainty_score"] * features.get("judge_uncertainty_score", 0.0)
-        + WEIGHTS["sycophancy_resistance"] * (1.0 - features.get("sycophancy_flip_rate", 0.0))
-        + WEIGHTS["prompt_robustness"] * (1.0 - features.get("prompt_flip_rate", 0.0))
-        + WEIGHTS["decision_robustness"] * features.get("decision_robustness", 0.0)
-        + WEIGHTS["trace_completeness"] * features.get("trace_completeness", 0.0)
-    )
+    weights = EVIDENCE_REQUIRED_WEIGHTS if features.get("evidence_required", 1.0) >= 0.5 else EVIDENCE_OPTIONAL_WEIGHTS
+    raw = sum(weight * _feature(features, name) for name, weight in weights.items())
     score = int(round(max(0.0, min(1.0, raw)) * 100))
     applied: List[str] = []
     source_quality = features.get("source_quality_score", 0.0)
+    retrieval_alignment = features.get("retrieval_alignment_score", source_quality)
     retrieval_peak = features.get(
         "retrieval_peak_score",
-        features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0)),
+        retrieval_alignment,
     )
     high_trust_evidence = source_quality >= 0.50
 
@@ -56,6 +44,14 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
     if caps.get("unsupported_high_impact_assumption") and (high_trust_evidence or retrieval_peak <= 0.0):
         score = min(score, 70)
         applied.append("unsupported high-impact assumption: score capped at 70")
+
+    unsupported_high_claims = int(caps.get("unsupported_high_impact_claims", 0))
+    if caps.get("evidence_required") and unsupported_high_claims >= 2:
+        score = min(score, 55)
+        applied.append("multiple high-impact claims lack source support: score capped at 55")
+    elif caps.get("evidence_required") and unsupported_high_claims == 1:
+        score = min(score, 65)
+        applied.append("high-impact claim lacks source support: score capped at 65")
 
     if features.get("semantic_stability", 1.0) < 0.45:
         score = min(score, 75)
@@ -73,12 +69,21 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
         score = min(score, 70)
         applied.append("low-provenance single-sample evidence: score capped at 70")
 
-    if features.get("sycophancy_flip_rate", 0.0) > 0.5:
-        score = min(score, 65)
-        applied.append("high sycophancy flip rate: score capped at 65")
-
     if caps.get("no_evidence_for_factual_current_question"):
-        score = min(score, 65)
-        applied.append("no evidence retrieval for factual/current question: score capped at 65")
+        score = min(score, 45)
+        applied.append("no evidence retrieval for source-required question: score capped at 45")
 
     return score, applied
+
+
+def _feature(features: Dict[str, float], name: str) -> float:
+    if name == "retrieval_alignment_score":
+        return features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0))
+    if name == "retrieval_peak_score":
+        return features.get(
+            "retrieval_peak_score",
+            features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0)),
+        )
+    if name == "sample_overlap_stability":
+        return features.get("sample_overlap_stability", features.get("semantic_stability", 0.0))
+    return features.get(name, 0.0)

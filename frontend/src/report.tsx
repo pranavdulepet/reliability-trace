@@ -44,7 +44,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
           </p>
         </div>
         <div className="score-block">
-          <span>Reliability Score</span>
+          <span>Diagnostic Score</span>
           <strong>{graph.answer.reliability_score} / 100</strong>
           <small>{formatStatus(graph.answer.calibration_status)}</small>
         </div>
@@ -103,7 +103,7 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
         <p>{meta.change}</p>
       </section>
       <aside className="signal-panel">
-        <h3>Trust Signals</h3>
+        <h3>Useful Signals</h3>
         <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
         <h3>Risk Signals</h3>
         <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
@@ -179,15 +179,23 @@ function DecisionTab({ graph }: { graph: ReliabilityGraph }) {
         <h3>{graph.decision_analysis.label}</h3>
         <p>{graph.decision_analysis.sensitivity_summary}</p>
         <Table
-          columns={["Alternative", "Utility"]}
-          rows={graph.decision_analysis.alternatives.map((alternative) => [alternative.name, formatNumber(alternative.utility)])}
+          columns={["Alternative", "Evidence", "Basis", "Risk"]}
+          rows={graph.decision_analysis.alternatives.map((alternative) => [
+            alternative.name,
+            alternative.evidence_status ?? (Number.isFinite(alternative.utility) ? `legacy utility ${formatNumber(alternative.utility ?? 0)}` : ""),
+            alternative.basis ?? "",
+            alternative.risk ?? "",
+          ])}
         />
       </div>
       <div>
         <h3>Criteria</h3>
         <Table
-          columns={["Criterion", "Weight"]}
-          rows={graph.decision_analysis.criteria.map((criterion) => [criterion.name, formatPercent(criterion.weight)])}
+          columns={["Criterion", "Why it matters"]}
+          rows={graph.decision_analysis.criteria.map((criterion) => [
+            criterion.name,
+            criterion.basis ?? (Number.isFinite(criterion.weight) ? `legacy weight ${formatPercent(criterion.weight ?? 0)}` : ""),
+          ])}
         />
       </div>
     </div>
@@ -222,7 +230,7 @@ function DisagreementTab({ graph }: { graph: ReliabilityGraph }) {
 function StressTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <Table
-      columns={["Test", "Changed", "New evidence", "Unsupported flip", "Impact", "Result"]}
+      columns={["Check", "Changed", "New evidence", "Unsupported flip", "Impact", "Result"]}
       rows={graph.stress_tests.map((test) => [
         test.test_type,
         test.answer_changed ? "yes" : "no",
@@ -294,7 +302,7 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
       <article className={`verdict-card verdict-${meta.verdict}`}>
         <span>Final decision</span>
         <strong>{meta.verdictLabel}</strong>
-        <p>{meta.score}/100 · {formatStatus(graph.answer.calibration_status)}</p>
+        <p>{meta.score}/100 diagnostic · {formatStatus(graph.answer.calibration_status)}</p>
       </article>
       <article>
         <span>Evidence</span>

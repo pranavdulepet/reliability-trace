@@ -197,8 +197,8 @@ export interface Assumption {
 
 export interface DecisionAnalysis {
   applicable: boolean;
-  alternatives: Array<{ name: string; utility: number }>;
-  criteria: Array<{ name: string; weight: number }>;
+  alternatives: Array<{ name: string; utility?: number; evidence_status?: string; basis?: string; risk?: string }>;
+  criteria: Array<{ name: string; weight?: number; basis?: string }>;
   recommendation: string | null;
   decision_margin?: number;
   sensitivity_summary: string;

@@ -7,7 +7,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Chat-first React UI with multi-turn threads, composer attachments, generated answers, reliability cards, collapsible activity, About, Settings, and JSON export.
 - FastAPI backend with SQLite persistence, conversation/message storage, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
 - Provider adapters for Tinker, OpenAI, Claude, Gemini, and OpenRouter behind one backend-only boundary.
-- Reliability Evidence Graph pipeline with candidate generation, claim extraction, attachment-scoped retrieval, claim-to-source matching, assumptions, disagreement, stress checks, scoring features, score caps, calibration status, and provider-neutral perturbation metadata.
+- Reliability Evidence Graph pipeline with candidate generation, claim extraction, attachment-scoped retrieval, claim-to-source matching, assumptions, disagreement, static risk checks, scoring features, score caps, calibration status, and provider-neutral perturbation metadata.
 - Answer-specific verdicts, evidence status, uncertainty, next action, source limitations, and claim relations.
 - Provider-backed structured claim extraction with strict JSON validation and retry on invalid JSON, with deterministic fallback.
 - Source ingestion for chat file/URL attachments, chunking, local hashed retrieval vectors, and chunk search.
@@ -22,7 +22,8 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 ## Not Complete
 
 - Multi-provider search abstraction beyond Tavily, domain/source reputation classifiers, and richer freshness scoring.
-- Provider-backed structured evidence assessment, assumption extraction, and judge rubrics across providers.
+- Provider-backed structured evidence assessment and assumption extraction across providers.
+- Full NLI-style claim verification beyond lexical source matching.
 - Full logprob-based robustness measurements.
 - Large empirical benchmark calibration for score quality, risk coverage, and ablations.
 - Hosted product capabilities: auth, workspaces, billing, rate limits, object storage, managed Postgres, audit logs, and admin controls.

@@ -6,11 +6,9 @@ from .pipeline.scoring import compute_reliability_score
 BUCKETS = [(0, 59), (60, 79), (80, 100)]
 ABLATION_GROUPS = {
     "claim support": ["claim_support_rate"],
+    "retrieval support": ["retrieval_alignment_score", "retrieval_peak_score"],
     "source quality": ["source_quality_score"],
-    "semantic stability": ["semantic_stability"],
-    "prompt robustness": ["prompt_flip_rate", "sycophancy_flip_rate"],
-    "judge signals": ["judge_factuality_score", "judge_uncertainty_score"],
-    "decision robustness": ["decision_robustness"],
+    "sample consistency": ["sample_overlap_stability", "semantic_stability"],
 }
 
 
@@ -86,10 +84,7 @@ def _ablation_report(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             base_score, _ = compute_reliability_score(features, {})
             ablated = dict(features)
             for feature_name in feature_names:
-                if feature_name in {"prompt_flip_rate", "sycophancy_flip_rate"}:
-                    ablated[feature_name] = 1.0
-                else:
-                    ablated[feature_name] = 0.0
+                ablated[feature_name] = 0.0
             ablated_score, _ = compute_reliability_score(ablated, {})
             deltas.append((base_score - ablated_score) / 100.0)
         rows.append(

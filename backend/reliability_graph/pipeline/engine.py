@@ -17,14 +17,14 @@ class ReliabilityPipeline:
         ("question_classifier", "Classifying question type"),
         ("candidate_generation", "Generating candidate answers"),
         ("semantic_clustering", "Clustering answer meanings"),
-        ("synthesis", "Synthesizing final answer while preserving dissent"),
+        ("synthesis", "Selecting final answer and preserving dissent signals"),
         ("claim_extraction", "Extracting atomic claims"),
         ("assumption_extraction", "Extracting assumptions"),
-        ("decision_analysis", "Running decision analysis"),
         ("evidence_retrieval", "Retrieving evidence"),
         ("claim_check", "Checking claim support"),
-        ("stress_test", "Running robustness and sycophancy stress tests"),
-        ("rubric_judge", "Scoring rubric signals"),
+        ("decision_analysis", "Running decision analysis"),
+        ("static_checks", "Running static risk checks"),
+        ("signal_summary", "Summarizing reliability signals"),
         ("reliability_scoring", "Computing diagnostic reliability score"),
         ("calibration_lookup", "Checking calibration status"),
         ("perturbation_probe", "Running perturbation checks"),
@@ -103,7 +103,7 @@ class ReliabilityPipeline:
 
         if step_type == "decision_analysis":
             state["decision_analysis"] = self._decision_analysis(state)
-            return {"alternatives": len(state["decision_analysis"]["alternatives"])}
+            return {"alternative_count": len(state["decision_analysis"]["alternatives"])}
 
         if step_type == "evidence_retrieval":
             state["evidence"] = self._evidence(state)
@@ -113,15 +113,15 @@ class ReliabilityPipeline:
             state["claim_assessments"] = self._assess_claims(state)
             return {"assessed_claims": len(state["claim_assessments"])}
 
-        if step_type == "stress_test":
+        if step_type == "static_checks":
             state["stress_tests"] = self._stress_tests(state)
             flips = [test for test in state["stress_tests"] if test["unsupported_flip"]]
-            state["sycophancy_flip_rate"] = len(flips) / float(len(state["stress_tests"]) or 1)
-            return {"unsupported_flip_rate": round(state["sycophancy_flip_rate"], 3)}
+            state["static_check_risk_rate"] = len(flips) / float(len(state["stress_tests"]) or 1)
+            return {"static_risk_rate": round(state["static_check_risk_rate"], 3)}
 
-        if step_type == "rubric_judge":
-            state["rubric"] = self._rubric(state)
-            return {"judge_factuality_score": state["rubric"]["dimensions"]["factual_support"]}
+        if step_type == "signal_summary":
+            state["signal_summary"] = self._signal_summary(state)
+            return {"claim_support_signal": state["signal_summary"]["dimensions"]["factual_support"]}
 
         if step_type == "reliability_scoring":
             state["features"], state["score"], state["score_caps"] = self._score(state)
@@ -345,9 +345,11 @@ class ReliabilityPipeline:
         decision_terms = ["should", "worth", "build", "pursue", "better", "choose", "recommend"]
         research_terms = ["latest", "current", "recent", "research", "paper", "benchmark", "api"]
         factual_terms = ["what is", "who is", "when", "where", "how many", "does"]
+        explanation_terms = ["explain", "how does", "how do", "why does", "why is"]
         is_decision = any(term in q for term in decision_terms)
         is_research = any(term in q for term in research_terms)
         is_factual = any(term in q for term in factual_terms)
+        is_explanation = any(term in q for term in explanation_terms)
         if sum([is_decision, is_research, is_factual]) >= 2:
             return "mixed"
         if is_decision:
@@ -356,6 +358,8 @@ class ReliabilityPipeline:
             return "research_qa"
         if is_factual:
             return "factual_qa"
+        if is_explanation:
+            return "explanation_qa"
         return "opinion_qa"
 
     def _cluster_candidates(self, candidates: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], float, float]:
@@ -395,7 +399,7 @@ class ReliabilityPipeline:
 
     def _synthesize(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
-        is_decision = question_type in ["decision_qa", "mixed", "opinion_qa"]
+        is_decision = question_type in ["decision_qa", "mixed"]
         primary = self._eval_answer_override(state["run"]) or self._primary_candidate_text(state["candidate_answers"])
         summary = self._summary_from_text(primary)
         recommendation = self._recommendation_from_text(primary) if is_decision else None
@@ -535,7 +539,7 @@ class ReliabilityPipeline:
                 "sensitivity_notes": "If the relevant facts are absent from the provided context, the answer should be treated as provisional.",
             }
         ]
-        if state["question_type"] in ["decision_qa", "mixed", "opinion_qa"]:
+        if state["question_type"] in ["decision_qa", "mixed"]:
             assumptions.append(
                 {
                     "assumption_id": "a2",
@@ -572,7 +576,7 @@ class ReliabilityPipeline:
 
     def _decision_analysis(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
-        if question_type not in ["decision_qa", "mixed", "opinion_qa"]:
+        if question_type not in ["decision_qa", "mixed"]:
             return {
                 "applicable": False,
                 "alternatives": [],
@@ -581,29 +585,58 @@ class ReliabilityPipeline:
                 "sensitivity_summary": "Decision analysis is not central for this question type.",
             }
         topic = self._question_topic(state["run"]["question"])
-        has_external_evidence = bool(self.retrieval_chunks)
+        external_evidence = [
+            item for item in state.get("evidence", []) if item.get("source_type") not in {"system_trace", "internal_policy"}
+        ]
+        has_external_evidence = bool(external_evidence)
+        supported_count = len(
+            [
+                assessment
+                for assessment in state.get("claim_assessments", [])
+                if assessment.get("relation") in {"supported", "partially_supported"}
+            ]
+        )
         alternatives = [
-            {"name": "Take the smallest reversible step on %s" % topic, "utility": 0.76 if has_external_evidence else 0.66},
-            {"name": "Act immediately at full scope", "utility": 0.52 if has_external_evidence else 0.40},
-            {"name": "Defer until stronger evidence exists", "utility": 0.61 if has_external_evidence else 0.70},
-            {"name": "Do not proceed", "utility": 0.44},
+            {
+                "name": "Take the smallest reversible step on %s" % topic,
+                "evidence_status": "supported" if has_external_evidence else "not_grounded",
+                "basis": "Best when the answer is directionally useful but user constraints or facts may still be incomplete.",
+                "risk": "Can still be wrong if the first step commits money, safety, or reputation.",
+            },
+            {
+                "name": "Defer until stronger evidence exists",
+                "evidence_status": "prudent_without_sources" if not has_external_evidence else "option_to_compare",
+                "basis": "Best when the question depends on current facts, source quality, or personal constraints not present in the chat.",
+                "risk": "Can waste time if the decision is low cost and easily reversible.",
+            },
+            {
+                "name": "Act immediately at full scope",
+                "evidence_status": "weak" if supported_count == 0 else "requires_user_constraints",
+                "basis": "Only reasonable when source support and user constraints are both strong.",
+                "risk": "Highest downside if the reliability signals are wrong or incomplete.",
+            },
+            {
+                "name": "Do not proceed",
+                "evidence_status": "not_enough_context",
+                "basis": "Reasonable when downside is high and the answer has weak or contradictory support.",
+                "risk": "Can be too conservative for reversible, low-cost decisions.",
+            },
         ]
+        if not has_external_evidence:
+            alternatives = [alternatives[1], alternatives[0], alternatives[2], alternatives[3]]
         criteria = [
-            {"name": "evidence quality", "weight": 0.25},
-            {"name": "fit with user constraints", "weight": 0.20},
-            {"name": "cost exposure", "weight": 0.15},
-            {"name": "reversibility", "weight": 0.15},
-            {"name": "decision usefulness", "weight": 0.25},
+            {"name": "evidence quality", "basis": "Are the factual claims supported by attached, fetched, or web sources?"},
+            {"name": "fit with user constraints", "basis": "Did the prompt provide goals, budget, risk tolerance, and time constraints?"},
+            {"name": "cost and reversibility", "basis": "Can the user test a small step before committing?"},
+            {"name": "downside risk", "basis": "Would a wrong answer create medical, legal, financial, safety, or reputational harm?"},
         ]
-        alternatives.sort(key=lambda item: item["utility"], reverse=True)
         return {
             "applicable": True,
             "alternatives": alternatives,
             "criteria": criteria,
             "recommendation": alternatives[0]["name"],
-            "decision_margin": round(alternatives[0]["utility"] - alternatives[1]["utility"], 2),
             "sensitivity_summary": (
-                "The recommendation changes if evidence quality, reversibility, or user-specific constraints are weighted differently."
+                "This is a qualitative decision frame. It should change when stronger evidence, clearer constraints, or downside risk changes."
             ),
             "label": "Decision support, not objective truth.",
         }
@@ -622,7 +655,7 @@ class ReliabilityPipeline:
             if any(item["support_relation"] == "contradicts" for item in evidence_items):
                 status = "contradicted"
                 relation = "contradicted"
-                support = 0.10
+                support = 0.0
             elif evidence_items:
                 best = max(float(item.get("relevance_score", 0.25)) for item in evidence_items)
                 if best >= 0.34 and any(item["support_relation"] == "supports" for item in evidence_items):
@@ -636,7 +669,7 @@ class ReliabilityPipeline:
             else:
                 status = "insufficient_evidence"
                 relation = "not_found"
-                support = 0.20
+                support = 0.0
             explanation = self._assessment_explanation(status, evidence_items)
             assessments.append(
                 {
@@ -660,15 +693,15 @@ class ReliabilityPipeline:
         contradiction_count = len([item for item in state.get("evidence", []) if item.get("support_relation") == "contradicts"])
         return [
             {
-                "test_type": "paraphrase",
+                "test_type": "static_paraphrase_check",
                 "answer_changed": False,
                 "new_evidence_introduced": False,
                 "unsupported_flip": False,
                 "impact_on_score": "none",
-                "result": "A neutral rephrasing should preserve the answer because no new evidence is introduced.",
+                "result": "Static check only: a neutral rephrasing should preserve the answer because no new evidence is introduced.",
             },
             {
-                "test_type": "false_authority",
+                "test_type": "static_false_authority_check",
                 "answer_changed": factual_without_sources,
                 "new_evidence_introduced": False,
                 "unsupported_flip": False,
@@ -680,7 +713,7 @@ class ReliabilityPipeline:
                 ),
             },
             {
-                "test_type": "source_contradiction",
+                "test_type": "static_source_contradiction_check",
                 "answer_changed": False,
                 "new_evidence_introduced": contradiction_count > 0,
                 "unsupported_flip": False,
@@ -692,7 +725,7 @@ class ReliabilityPipeline:
                 ),
             },
             {
-                "test_type": "false_premise",
+                "test_type": "static_false_premise_check",
                 "answer_changed": state["semantic_stability"] < 0.55,
                 "new_evidence_introduced": False,
                 "unsupported_flip": state["semantic_stability"] < 0.35,
@@ -701,26 +734,25 @@ class ReliabilityPipeline:
             },
         ]
 
-    def _rubric(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _signal_summary(self, state: Dict[str, Any]) -> Dict[str, Any]:
         support_rate, source_quality = self._support_and_source_quality(state)
+        assessments = state["claim_assessments"]
+        total = float(len(assessments) or 1)
+        insufficient = len([assessment for assessment in assessments if assessment["status"] == "insufficient_evidence"]) / total
+        contradicted = len([assessment for assessment in assessments if assessment["status"] == "contradicted"]) / total
         return {
             "judge_score_is_diagnostic_only": True,
-            "judge_model": "ReliabilityGraph rubric",
-            "rubric_version": "rg-rubric",
-            "judge_calibration": "unvalidated",
+            "judge_model": "deterministic_signal_summary",
+            "summary_version": "rg-signal-summary",
+            "judge_calibration": "not_a_model_judge",
             "dimensions": {
                 "factual_support": support_rate,
                 "source_quality": source_quality,
-                "claim_coverage": 0.82,
-                "assumption_clarity": 0.78,
-                "uncertainty_quality": 0.84,
-                "decision_criteria_clarity": 0.76 if state["decision_analysis"]["applicable"] else 0.0,
-                "reasoning_validity": 0.74,
+                "claim_coverage": round(max(0.0, 1.0 - insufficient), 3),
+                "uncertainty_quality": self._uncertainty_visibility(state),
+                "decision_criteria_clarity": self._decision_criteria_signal(state),
+                "contradiction_safety": round(max(0.0, 1.0 - contradicted), 3),
                 "semantic_stability": state["semantic_stability"],
-                "prompt_robustness": 0.90,
-                "sycophancy_resistance": 1.0 - state["sycophancy_flip_rate"],
-                "actionability": 0.78,
-                "trace_completeness": 0.94,
             },
         }
 
@@ -733,13 +765,13 @@ class ReliabilityPipeline:
         )
         contradicted = len([a for a in assessments if a["status"] == "contradicted"])
         insufficient = len([a for a in assessments if a["status"] == "insufficient_evidence"])
-        decision_margin = state["decision_analysis"].get("decision_margin", 0.0) if state["decision_analysis"]["applicable"] else 0.5
         source_quality = self._source_quality_score(state["evidence"])
         retrieval_alignment = self._retrieval_alignment_score(state)
         retrieval_peak = self._retrieval_peak_score(state)
         sample_overlap = self._sample_overlap_stability(state["candidate_answers"])
-        prompt_flip_rate = self._prompt_flip_rate(state.get("perturbation_probe", {}).get("results") or state.get("stress_tests", []))
+        evidence_required = self._evidence_required_for_score(state)
         features = {
+            "evidence_required": 1.0 if evidence_required else 0.0,
             "claim_support_rate": support_points / total,
             "contradiction_rate": contradicted / total,
             "insufficient_evidence_rate": insufficient / total,
@@ -749,17 +781,17 @@ class ReliabilityPipeline:
             "retrieval_alignment_score": retrieval_alignment,
             "retrieval_peak_score": retrieval_peak,
             "sample_disagreement_rate": 1.0 - state["semantic_stability"],
-            "prompt_flip_rate": prompt_flip_rate,
-            "sycophancy_flip_rate": state["sycophancy_flip_rate"],
-            "judge_factuality_score": state["rubric"]["dimensions"]["factual_support"],
-            "judge_uncertainty_score": state["rubric"]["dimensions"]["uncertainty_quality"],
-            "assumption_sensitivity": 0.35,
-            "decision_margin": decision_margin,
-            "decision_robustness": max(0.0, min(1.0, decision_margin / 0.3)),
-            "trace_completeness": 0.94,
+            "static_check_risk_rate": state.get("static_check_risk_rate", 0.0),
             "tool_error_count": 1.0 if state.get("provider_error") else 0.0,
         }
+        high_unsupported_claims = [
+            assessment
+            for assessment in assessments
+            if assessment["status"] == "insufficient_evidence"
+            and self._claim_by_id(state["claims"], assessment["claim_id"]).get("importance") == "high"
+        ]
         caps = {
+            "evidence_required": evidence_required,
             "critical_factual_contradictions": len(
                 [
                     assessment
@@ -768,12 +800,17 @@ class ReliabilityPipeline:
                     and self._claim_by_id(state["claims"], assessment["claim_id"]).get("importance") == "high"
                 ]
             ),
-            "unsupported_high_impact_assumption": any(
+            "unsupported_high_impact_claims": len(high_unsupported_claims),
+            "unsupported_high_impact_assumption": (
+                evidence_required
+                or state["decision_analysis"]["applicable"]
+            )
+            and any(
                 assumption["importance"] == "high" and assumption["evidence_status"] != "supported"
                 for assumption in state["assumptions"]
             ),
             "no_evidence_for_factual_current_question": (
-                state["question_type"] in ["factual_qa", "research_qa", "mixed"] and not self._has_external_evidence(state["evidence"])
+                evidence_required and not self._has_external_evidence(state["evidence"])
             ),
         }
         score, applied = compute_reliability_score(features, caps)
@@ -1143,7 +1180,10 @@ class ReliabilityPipeline:
         assessments = state["claim_assessments"]
         if not assessments:
             return 0.0, 0.0
-        support = sum(float(assessment["support_score"]) for assessment in assessments) / len(assessments)
+        support = sum(
+            1.0 if assessment["status"] == "supported" else 0.30 if assessment["status"] == "partially_supported" else 0.0
+            for assessment in assessments
+        ) / len(assessments)
         return round(support, 3), self._source_quality_score(state["evidence"])
 
     def _source_quality_score(self, evidence: List[Dict[str, Any]]) -> float:
@@ -1152,14 +1192,58 @@ class ReliabilityPipeline:
         values = {"high": 1.0, "medium": 0.62, "low": 0.25}
         return round(sum(values.get(item.get("source_quality"), 0.25) for item in evidence) / len(evidence), 3)
 
-    def _prompt_flip_rate(self, tests: List[Dict[str, Any]]) -> float:
-        if not tests:
+    def _uncertainty_visibility(self, state: Dict[str, Any]) -> float:
+        answer = state.get("answer", {}).get("final_answer", "").lower()
+        uncertainty_terms = ["uncertain", "depends", "likely", "may", "might", "could", "verify", "source", "evidence"]
+        needs_visible_uncertainty = (
+            state.get("semantic_stability", 1.0) < 0.55
+            or any(assessment["status"] != "supported" for assessment in state.get("claim_assessments", []))
+            or self._evidence_required_for_score(state)
+        )
+        if not needs_visible_uncertainty:
+            return 1.0
+        return 1.0 if any(term in answer for term in uncertainty_terms) else 0.35
+
+    def _decision_criteria_signal(self, state: Dict[str, Any]) -> float:
+        if not state["decision_analysis"]["applicable"]:
             return 0.0
-        flips = len([test for test in tests if test.get("unsupported_flip")])
-        return flips / float(len(tests))
+        question = state["run"]["question"].lower()
+        criteria_terms = ["budget", "cost", "time", "risk", "goal", "constraint", "deadline", "preference"]
+        provided = sum(1 for term in criteria_terms if term in question)
+        return round(min(1.0, 0.35 + provided * 0.15), 3)
 
     def _has_external_evidence(self, evidence: List[Dict[str, Any]]) -> bool:
         return any(item.get("source_type") not in {"system_trace", "internal_policy"} for item in evidence)
+
+    def _evidence_required_for_score(self, state: Dict[str, Any]) -> bool:
+        question = state["run"]["question"].lower()
+        route = ((state["run"].get("web_search") or {}).get("route") or {}).get("route")
+        if route in {"web_search", "hybrid", "attachments_only"}:
+            return True
+        if state["question_type"] in {"research_qa", "mixed"}:
+            return True
+        if self._is_high_stakes_question(question):
+            return True
+        current_terms = [
+            "latest",
+            "current",
+            "today",
+            "yesterday",
+            "this week",
+            "this month",
+            "recent",
+            "news",
+            "price",
+            "weather",
+            "release",
+            "version",
+            "ceo",
+            "president",
+            "policy",
+            "law",
+            "regulation",
+        ]
+        return state["question_type"] == "factual_qa" and any(term in question for term in current_terms)
 
     def _safe_error_text(self, message: str) -> str:
         cleaned = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", message, flags=re.IGNORECASE)
@@ -1216,8 +1300,9 @@ class ReliabilityPipeline:
         ]
         probe_results = state.get("perturbation_probe", {}).get("results", [])
         perturbation_flip = any(result.get("unsupported_flip") for result in probe_results)
+        perturbation_available = bool(state.get("perturbation_probe", {}).get("available"))
         no_source_factual = (
-            state["question_type"] in ["factual_qa", "research_qa", "mixed"]
+            self._evidence_required_for_score(state)
             and not external_evidence
         )
         provider_error = state.get("provider_error") or state.get("structured_analysis_error")
@@ -1236,7 +1321,7 @@ class ReliabilityPipeline:
         else:
             evidence_status = "No attached, fetched, or web source supports this answer."
 
-        if high_contradicted or (contradicted and score < 65) or perturbation_flip or (no_source_factual and score < 55):
+        if high_contradicted or (contradicted and score < 65) or perturbation_flip or no_source_factual:
             verdict = "do_not_rely"
         elif score >= 75 and external_evidence and not contradicted and state["semantic_stability"] >= 0.55:
             verdict = "rely"
@@ -1274,9 +1359,8 @@ class ReliabilityPipeline:
             positive.append("%d of %d checked claims have direct or partial source support" % (len(supported) + len(partially_supported), len(assessments)))
         if state["semantic_stability"] >= 0.55:
             positive.append("Independent samples mostly agree at the meaning level")
-        if not perturbation_flip:
+        if perturbation_available and not perturbation_flip:
             positive.append("Robustness checks did not find an unsupported answer flip")
-        positive.append("The pipeline recorded observable generation, retrieval, checking, and scoring steps")
 
         negative = []
         if not external_evidence:
@@ -1432,6 +1516,12 @@ class ReliabilityPipeline:
                 "limitation": "Claim extraction and lexical retrieval can miss paraphrases or source context.",
             },
             {
+                "signal": "Source quality",
+                "method": "source_quality_heuristic",
+                "research_lineage": "Grounded generation and source-aware factuality evaluation",
+                "limitation": "Source quality is heuristic and needs benchmark calibration.",
+            },
+            {
                 "signal": "Sample consistency",
                 "method": "sample_consistency",
                 "research_lineage": "SelfCheckGPT",
@@ -1450,10 +1540,10 @@ class ReliabilityPipeline:
                 "limitation": "Scores remain diagnostic until enough local labels exist.",
             },
             {
-                "signal": "Reasoning-trace guardrail",
-                "method": "unfaithful_cot_guardrail",
+                "signal": "Observable activity",
+                "method": "tool_trace_logging",
                 "research_lineage": "Unfaithful chain-of-thought findings",
-                "limitation": "The app shows observable steps, not hidden model thoughts.",
+                "limitation": "Activity is for auditability and is not used as proof that the answer is true.",
             },
         ]
         if state.get("perturbation_probe"):

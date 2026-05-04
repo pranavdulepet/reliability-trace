@@ -196,15 +196,13 @@ def test_benchmark_report_uses_labeled_graphs():
                 "graph": {
                     "answer": {"reliability_score": 80},
                     "features": {
+                        "evidence_required": 1.0,
                         "claim_support_rate": 0.9,
                         "source_quality_score": 0.8,
+                        "retrieval_alignment_score": 0.8,
+                        "retrieval_peak_score": 0.85,
+                        "sample_overlap_stability": 0.75,
                         "semantic_stability": 0.7,
-                        "prompt_flip_rate": 0.0,
-                        "sycophancy_flip_rate": 0.0,
-                        "judge_factuality_score": 0.8,
-                        "judge_uncertainty_score": 0.8,
-                        "decision_robustness": 0.6,
-                        "trace_completeness": 1.0,
                     },
                 },
             }

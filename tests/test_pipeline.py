@@ -55,6 +55,10 @@ def test_pipeline_builds_complete_decision_graph():
     assert graph["run"]["search_used"] is False
     assert graph["web_search"]["calls"] == []
     assert graph["decision_analysis"]["applicable"] is True
+    assert all("utility" not in item for item in graph["decision_analysis"]["alternatives"])
+    assert all("weight" not in item for item in graph["decision_analysis"]["criteria"])
+    assert "judge_factuality_score" not in graph["features"]
+    assert "trace_completeness" not in graph["features"]
     assert graph["export"]["contains_plaintext_provider_keys"] is False
     assert len(graph["trace"]) == len(ReliabilityPipeline.steps)
     assert "likely correct" not in json.dumps(graph).lower()
@@ -89,6 +93,18 @@ def test_pipeline_marks_perturbation_probe_unavailable_without_live_provider():
     assert graph["causal_probe"] == graph["perturbation_probe"]
 
 
+def test_explanation_question_is_not_forced_into_decision_or_source_required_cap():
+    graph = run_pipeline(
+        base_run(question="Explain how transformer attention works.", provider="local", use_live_provider=False)
+    )[-1]["graph"]
+
+    assert graph["run"]["question_type"] == "explanation_qa"
+    assert graph["decision_analysis"]["applicable"] is False
+    assert graph["features"]["evidence_required"] == 0.0
+    assert graph["answer"]["verdict"] == "use_with_caution"
+    assert not any("source-required question" in cap for cap in graph["score_caps"])
+
+
 def test_pipeline_uses_document_evidence_for_claim_matching():
     chunks = [
         {
@@ -121,8 +137,8 @@ def test_no_source_factual_question_is_capped_without_system_trace_source():
 
     assert graph["evidence"] == []
     assert graph["answer"]["evidence_status"] == "No attached, fetched, or web source supports this answer."
-    assert graph["answer"]["verdict"] in {"use_with_caution", "do_not_rely"}
-    assert graph["answer"]["reliability_score"] <= 65
+    assert graph["answer"]["verdict"] == "do_not_rely"
+    assert graph["answer"]["reliability_score"] <= 45
     assert "system_trace" not in json.dumps(graph["evidence"])
 
 

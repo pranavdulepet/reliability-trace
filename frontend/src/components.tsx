@@ -538,7 +538,8 @@ export function formatTraceOutput(span: TraceSpan): string {
     return `${parsed.assumption_count ?? 0} assumption${parsed.assumption_count === 1 ? "" : "s"} extracted.`;
   }
   if (span.type === "decision_analysis") {
-    return `${parsed.alternative_count ?? 0} alternative${parsed.alternative_count === 1 ? "" : "s"} compared.`;
+    const count = parsed.alternative_count ?? parsed.alternatives ?? 0;
+    return `${count} decision option${count === 1 ? "" : "s"} framed.`;
   }
   if (span.type === "evidence_retrieval") {
     return `${parsed.evidence_count ?? 0} source match${parsed.evidence_count === 1 ? "" : "es"} from ${parsed.source_chunk_count ?? 0} source chunk${parsed.source_chunk_count === 1 ? "" : "s"}.`;
@@ -546,11 +547,12 @@ export function formatTraceOutput(span: TraceSpan): string {
   if (span.type === "claim_check") {
     return `${parsed.assessed_claims ?? 0} claim${parsed.assessed_claims === 1 ? "" : "s"} checked against available evidence.`;
   }
-  if (span.type === "stress_test") {
-    return `Unsupported flip rate ${formatMetric(parsed.unsupported_flip_rate)}.`;
+  if (span.type === "static_checks" || span.type === "stress_test") {
+    return `Static risk checks complete${parsed.static_risk_rate !== undefined ? `; risk ${formatMetric(parsed.static_risk_rate)}` : ""}.`;
   }
-  if (span.type === "rubric_judge") {
-    return `Factuality judge score ${formatMetric(parsed.factuality_score)}.`;
+  if (span.type === "signal_summary" || span.type === "rubric_judge") {
+    const signal = parsed.claim_support_signal ?? parsed.judge_factuality_score ?? parsed.factuality_score;
+    return `Reliability signals summarized${signal !== undefined ? `; claim support ${formatMetric(signal)}` : ""}.`;
   }
   if (span.type === "reliability_scoring") {
     const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";

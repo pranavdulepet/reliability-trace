@@ -3,15 +3,13 @@ from backend.reliability_graph.pipeline.scoring import compute_reliability_score
 
 def perfect_features():
     return {
+        "evidence_required": 1.0,
         "claim_support_rate": 1.0,
         "semantic_stability": 1.0,
         "source_quality_score": 1.0,
-        "judge_factuality_score": 1.0,
-        "judge_uncertainty_score": 1.0,
-        "sycophancy_flip_rate": 0.0,
-        "prompt_flip_rate": 0.0,
-        "decision_robustness": 1.0,
-        "trace_completeness": 1.0,
+        "retrieval_alignment_score": 1.0,
+        "retrieval_peak_score": 1.0,
+        "sample_overlap_stability": 1.0,
     }
 
 
@@ -60,8 +58,8 @@ def test_score_caps_missing_current_evidence():
         {"no_evidence_for_factual_current_question": True},
     )
 
-    assert score == 65
-    assert any("no evidence retrieval" in cap for cap in caps)
+    assert score == 45
+    assert any("source-required question" in cap for cap in caps)
 
 
 def test_score_caps_low_sample_overlap():
@@ -87,7 +85,7 @@ def test_score_caps_low_provenance_single_sample_evidence():
     assert any("low-provenance single-sample evidence" in cap for cap in caps)
 
 
-def test_score_uses_peak_retrieval_support_when_available():
+def test_score_does_not_overweight_single_peak_retrieval_match():
     features = perfect_features()
     features["claim_support_rate"] = 0.2
     features["retrieval_alignment_score"] = 0.1
@@ -97,5 +95,25 @@ def test_score_uses_peak_retrieval_support_when_available():
 
     score, caps = compute_reliability_score(features, {})
 
-    assert score >= 60
+    assert score <= 50
+    assert caps == []
+
+
+def test_score_uses_consistency_more_when_external_evidence_is_optional():
+    features = perfect_features()
+    features.update(
+        {
+            "evidence_required": 0.0,
+            "claim_support_rate": 0.0,
+            "retrieval_alignment_score": 0.0,
+            "retrieval_peak_score": 0.0,
+            "source_quality_score": 0.0,
+            "sample_overlap_stability": 1.0,
+            "semantic_stability": 1.0,
+        }
+    )
+
+    score, caps = compute_reliability_score(features, {})
+
+    assert score == 70
     assert caps == []
