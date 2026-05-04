@@ -59,6 +59,23 @@ STOPWORDS = {
 }
 
 NEGATION_TERMS = {"not", "no", "never", "false", "incorrect", "contradict", "contradicts", "cannot", "can't"}
+SECONDARY_SOURCE_DOMAINS = (
+    "reddit.com",
+    "stackoverflow.com",
+    "wikipedia.org",
+)
+OFFICIAL_SOURCE_HINTS = (
+    "docs.",
+    "/docs",
+    "/documentation",
+    "/download",
+    "/downloads",
+    "/release",
+    "/releases",
+    "/versions",
+    "/changelog",
+)
+FRESHNESS_TERMS = {"current", "latest", "official", "release", "releases", "stable", "version", "versions"}
 
 
 def tokenize(text: str) -> List[str]:
@@ -132,8 +149,8 @@ def search_chunks(query: str, chunks: List[Dict[str, Any]], limit: int = 8) -> L
             continue
         lexical = len(query_tokens & chunk_tokens) / float(len(query_tokens) or 1)
         semantic = cosine(query_vector, chunk_vector)
-        score = 0.62 * semantic + 0.38 * min(1.0, lexical)
-        ranked.append({**chunk, "relevance_score": round(score, 4)})
+        score = 0.62 * semantic + 0.38 * min(1.0, lexical) + source_priority(query_tokens, chunk)
+        ranked.append({**chunk, "relevance_score": round(max(0.0, min(1.0, score)), 4)})
     ranked.sort(key=lambda item: item["relevance_score"], reverse=True)
     return ranked[:limit]
 
@@ -174,22 +191,18 @@ def support_relation(claim: str, snippet: str) -> str:
     snippet_lower = snippet.lower()
     claim_tokens = set(tokenize(claim_for_tokens))
     snippet_tokens = set(tokenize(snippet))
+    overlap = len(claim_tokens & snippet_tokens) / float(len(claim_tokens) or 1)
 
     if claim_lower.strip(". ") in snippet_lower:
         return "supports"
+    if overlap >= 0.3 and len(claim_tokens & snippet_tokens) >= 3 and _has_direct_contradiction(claim_tokens, snippet_lower):
+        return "contradicts"
     if claim_tokens and claim_tokens.issubset(snippet_tokens):
         return "supports"
-    overlap = len(claim_tokens & snippet_tokens) / float(len(claim_tokens) or 1)
     if ("normal api provider" in claim_lower or "supported provider" in claim_lower) and (
         "supported provider" in snippet_lower or "normal api provider" in snippet_lower
     ):
         return "supports"
-    if (
-        overlap >= 0.3
-        and len(claim_tokens & snippet_tokens) >= 3
-        and bool(claim_tokens & NEGATION_TERMS) != bool(snippet_tokens & NEGATION_TERMS)
-    ):
-        return "contradicts"
     return "supports" if overlap >= 0.45 else "partially_supports"
 
 
@@ -198,11 +211,47 @@ def source_quality(chunk: Dict[str, Any]) -> str:
     url = chunk.get("source_url") or ""
     if source_type in {"official_docs", "paper", "peer_reviewed_paper"}:
         return "high"
+    if _is_secondary_source(url):
+        return "low"
     if any(domain in url for domain in [".edu", ".gov", "docs.", "arxiv.org", "aclanthology.org"]):
+        return "high"
+    if any(hint in url for hint in OFFICIAL_SOURCE_HINTS) and not _is_secondary_source(url):
         return "high"
     if source_type in {"web_page", "web_search_result", "uploaded_document", "manual_source"}:
         return "medium"
     return "low"
+
+
+def source_priority(query_tokens: set, chunk: Dict[str, Any]) -> float:
+    url = str(chunk.get("source_url") or "").lower()
+    title = str(chunk.get("title") or "").lower()
+    is_freshness_query = bool(query_tokens & FRESHNESS_TERMS)
+    if not is_freshness_query:
+        return 0.0
+
+    priority = 0.0
+    if _is_secondary_source(url):
+        priority -= 0.08
+
+    source_identity = "%s %s" % (title, url)
+    has_subject_match = any(token in source_identity for token in query_tokens - FRESHNESS_TERMS)
+    if has_subject_match and any(hint in url for hint in OFFICIAL_SOURCE_HINTS) and not _is_secondary_source(url):
+        priority += 0.14
+    return priority
+
+
+def _is_secondary_source(url: str) -> bool:
+    return any(domain in url for domain in SECONDARY_SOURCE_DOMAINS)
+
+
+def _has_direct_contradiction(claim_tokens: set, snippet_lower: str) -> bool:
+    if any(term in snippet_lower for term in ["contradicts", "contradicted", "is false", "are false", "is incorrect", "are incorrect"]):
+        return True
+    for match in re.finditer(r"\b(not|no|never|cannot|can't)\b(?:[^\w.!?;:]+[\w'-]+){0,5}", snippet_lower):
+        window_tokens = set(tokenize(match.group(0)))
+        if window_tokens & (claim_tokens - NEGATION_TERMS):
+            return True
+    return False
 
 
 def compact_snippet(text: str, query: str, max_chars: int = 520) -> str:

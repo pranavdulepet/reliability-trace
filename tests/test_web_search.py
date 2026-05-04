@@ -11,6 +11,18 @@ def test_research_router_covers_no_search_attachment_web_and_hybrid():
     assert choose_research_route("Compare this document with current policy.", ["doc_1"], "auto").route == "hybrid"
 
 
+def test_research_router_rewrites_search_queries_without_answer_instructions():
+    route = choose_research_route(
+        "What is the latest stable Python release today? Answer in one sentence and cite sources.",
+        [],
+        "auto",
+    )
+
+    assert route.route == "web_search"
+    assert route.query == "official latest stable Python release"
+    assert route.recency is None
+
+
 def test_research_router_respects_manual_search_modes():
     assert choose_research_route("Tell me a story.", [], "always").route == "web_search"
     assert choose_research_route("What is current?", [], "off").route == "no_search"

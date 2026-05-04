@@ -48,6 +48,23 @@ def test_support_relation_does_not_overread_unrelated_negation():
     assert support_relation(claim, snippet) == "supports"
 
 
+def test_support_relation_does_not_treat_page_fallback_as_claim_contradiction():
+    claim = "The information is stated on the Python Source Releases page on Python.org."
+    snippet = (
+        "Python Source Releases | Python.org Notice: This page displays a fallback because "
+        "interactive scripts did not run. Latest Python 3 Release - Python 3.14.4."
+    )
+
+    assert support_relation(claim, snippet) in {"supports", "partially_supports"}
+
+
+def test_support_relation_detects_direct_negation_near_claim_terms():
+    claim = "Python 3.14.4 is the latest stable release."
+    snippet = "Python 3.14.4 is not the latest stable release."
+
+    assert support_relation(claim, snippet) == "contradicts"
+
+
 def test_storage_saves_documents_and_searches_chunks(tmp_path):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()
@@ -58,6 +75,29 @@ def test_storage_saves_documents_and_searches_chunks(tmp_path):
 
     assert document["chunk_count"] == 1
     assert matches[0]["title"] == "Probe Notes"
+
+
+def test_search_prefers_official_release_sources_over_secondary_sources():
+    official = {
+        **build_chunks("Python source releases include the latest stable release downloads and version history.")[0],
+        "chunk_id": "official_1",
+        "document_id": "doc_official",
+        "title": "Python Source Releases",
+        "source_url": "https://www.python.org/downloads/source/",
+        "source_type": "web_search_result",
+    }
+    secondary = {
+        **build_chunks("How to get the latest stable release of Python via a single HTTP request.")[0],
+        "chunk_id": "secondary_1",
+        "document_id": "doc_secondary",
+        "title": "How to get the version number of the latest stable release of Python",
+        "source_url": "https://stackoverflow.com/questions/70378786/example",
+        "source_type": "web_search_result",
+    }
+
+    matches = search_chunks("official latest stable Python release", [secondary, official], limit=2)
+
+    assert matches[0]["title"] == "Python Source Releases"
 
 
 def test_storage_reuses_duplicate_documents_by_hash(tmp_path):

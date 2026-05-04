@@ -196,13 +196,24 @@ def _needs_web_search(lowered: str) -> bool:
 def _search_query(question: str) -> str:
     query = re.sub(r"\s+", " ", question.strip())
     query = re.sub(r"^(please\s+)?(search|look up|browse|find)\s+", "", query, flags=re.IGNORECASE)
+    query = re.sub(r"\b(answer|respond)\s+in\s+[^.?!;]*", " ", query, flags=re.IGNORECASE)
+    query = re.sub(r"\b(and\s+)?(cite|include|with)\s+(sources|citations)\b", " ", query, flags=re.IGNORECASE)
+    query = re.sub(r"\b(today|right now|currently)\b", " ", query, flags=re.IGNORECASE)
+    query = re.sub(r"^(what is|what's|which is|which)\s+(the\s+)?", "", query, flags=re.IGNORECASE)
+    query = re.sub(r"\s+", " ", query).strip(" ?.!;:")
+    if re.search(r"\b(latest|current)\b", query, flags=re.IGNORECASE) and re.search(
+        r"\b(stable\s+)?(release|version)\b", query, flags=re.IGNORECASE
+    ):
+        query = "official %s" % query
     return query[:500]
 
 
 def _recency(lowered: str) -> Optional[str]:
-    if any(term in lowered for term in ["today", "now"]):
+    if any(term in lowered for term in ["today", "now"]) and any(
+        term in lowered for term in ["news", "price", "prices", "stock", "weather"]
+    ):
         return "day"
-    if "this week" in lowered or "latest" in lowered or "news" in lowered:
+    if "this week" in lowered or "news" in lowered:
         return "week"
     if "recent" in lowered or "this month" in lowered:
         return "month"

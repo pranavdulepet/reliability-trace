@@ -104,6 +104,9 @@ function App() {
     setPreference(nextPreference);
     setSearchPreference(nextSearchPreference);
     setConversations(nextConversations);
+    if (!busy && activeConversationId && !nextConversations.some((conversation) => conversation.conversation_id === activeConversationId)) {
+      clearActiveConversation();
+    }
     setDraftSearchMode((current) => (current === "auto" ? nextSearchPreference.preference.search_mode : current));
     setKeyProvider((current) => {
       if (nextProviders.some((provider) => provider.provider === current && isRealProvider(provider))) return current;
@@ -112,18 +115,21 @@ function App() {
   }
 
   async function loadConversation(conversationId: string) {
-    setConversation(await getConversation(conversationId));
+    try {
+      setConversation(await getConversation(conversationId));
+    } catch (err) {
+      if (isMissingConversationError(err)) {
+        clearActiveConversation();
+        setError(null);
+        return;
+      }
+      throw err;
+    }
   }
 
   async function handleNewChat() {
-    setActiveConversationId(null);
-    setConversation(null);
-    setDraft("");
-    setAttachments([]);
+    clearActiveConversation();
     setDraftSearchMode(searchPreference?.preference.search_mode ?? "auto");
-    setEvents([]);
-    setStreamGraph(null);
-    setStreamingRunId(null);
     setView("chat");
   }
 
@@ -363,6 +369,17 @@ function App() {
     setError(err instanceof Error ? err.message : "Something went wrong");
   }
 
+  function clearActiveConversation() {
+    setActiveConversationId(null);
+    setConversation(null);
+    setDraft("");
+    setAttachments([]);
+    setEvents([]);
+    setStreamGraph(null);
+    setStreamingRunId(null);
+    setBusy(false);
+  }
+
   function handleDraftChange(value: string) {
     setDraft(value);
     if (error) setError(null);
@@ -433,6 +450,11 @@ function App() {
       </main>
     </div>
   );
+}
+
+function isMissingConversationError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return err.message.includes("Not Found") || err.message.includes('"detail"');
 }
 
 function ChatView({
