@@ -5,16 +5,20 @@ from backend.reliability_graph.evals import (
     EvalExample,
     auroc,
     average_precision,
+    baseline_report,
     build_markdown_report,
     expected_calibration_error,
+    filter_examples_for_mode,
     grade_simpleqa_prediction,
     ragtruth_to_example,
     redact_value,
     run_eval_example,
     selfcheck_to_example,
     simpleqa_to_example,
+    stable_split_bucket,
     summarize_eval_results,
 )
+from scripts.run_reliability_evals import _append_result, _read_results
 
 
 def test_eval_metric_math_on_tiny_fixture():
@@ -81,6 +85,27 @@ def test_simpleqa_strict_grading_marks_ambiguous_review():
     assert grade_simpleqa_prediction(example.question, example.answer, "Los Angeles") == "incorrect"
 
 
+def test_eval_dev_test_split_is_stable():
+    rag_train = EvalExample("ragtruth", "train", "q", "a", [], {}, {"split": "train"})
+    rag_test = EvalExample("ragtruth", "test", "q", "a", [], {}, {"split": "test"})
+    selfcheck = [EvalExample("selfcheck", str(index), "q", "a", [], {}, {}) for index in range(20)]
+
+    assert filter_examples_for_mode([rag_train, rag_test], "dev", seed=7) == [rag_train]
+    assert filter_examples_for_mode([rag_train, rag_test], "test", seed=7) == [rag_test]
+    assert stable_split_bucket("selfcheck:1", 7) == stable_split_bucket("selfcheck:1", 7)
+    assert len(filter_examples_for_mode(selfcheck, "dev", seed=7)) + len(filter_examples_for_mode(selfcheck, "test", seed=7)) == 20
+
+
+def test_resume_result_read_deduplicates(tmp_path):
+    path = tmp_path / "results.jsonl"
+    row = {"benchmark": "ragtruth", "example_id": "a", "metrics": {"score": 0.5}}
+
+    _append_result(path, row)
+    _append_result(path, row)
+
+    assert len(_read_results(path)) == 1
+
+
 def test_eval_answer_override_does_not_call_provider(monkeypatch):
     def fail_provider(*_args, **_kwargs):
         raise AssertionError("provider should not be built for fixed-answer evals")
@@ -129,6 +154,7 @@ def test_eval_report_contains_required_sections():
             "verdict": "rely",
             "evidence_status": "Sources support the main checked claims.",
             "features": {"claim_support_rate": 1.0, "semantic_stability": 1.0},
+            "graph": {"evidence": [{"relevance_score": 0.9}], "claim_assessments": []},
             "labels": {"bad_answer": False, "is_correct": True, "include_in_calibration": True},
             "metrics": {"score": 0.82, "risk_score": 0.18, "correctness": 1.0, "bad_answer": False, "false_safe": False},
         }
@@ -137,5 +163,42 @@ def test_eval_report_contains_required_sections():
     report = build_markdown_report(summary, results)
 
     assert "## Aggregate Metrics" in report
+    assert "## Baselines" in report
     assert "## Ablations" in report
     assert "## Failure Cases" in report
+    assert "## Fix Candidates" in report
+
+
+def test_selfcheck_sentence_metrics_and_baselines():
+    result = {
+        "benchmark": "selfcheck",
+        "example_id": "w1",
+        "score": 40,
+        "verdict": "use_with_caution",
+        "evidence_status": "mixed",
+        "features": {"claim_support_rate": 0.2, "semantic_stability": 0.3},
+        "graph": {
+            "evidence": [{"relevance_score": 0.2}],
+            "claim_assessments": [],
+        },
+        "labels": {
+            "bad_answer": True,
+            "is_correct": False,
+            "include_in_calibration": True,
+            "bad_sentence_rate": 1.0,
+        },
+        "metrics": {
+            "score": 0.4,
+            "risk_score": 0.6,
+            "correctness": 0.0,
+            "bad_answer": True,
+            "false_safe": False,
+            "selfcheck_ngram_risk": 0.8,
+            "sentence_items": [{"is_nonfactual": True, "risk_score": 0.9}],
+        },
+    }
+
+    summary = summarize_eval_results([result])
+
+    assert summary["benchmark_details"]["selfcheck"]["sentence_nonfact_auprc"] == 1.0
+    assert baseline_report([result])["claim_support_only"]["scored_count"] == 1

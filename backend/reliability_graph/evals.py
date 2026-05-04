@@ -13,7 +13,9 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tup
 
 from .pipeline import ReliabilityPipeline
 from .pipeline.scoring import compute_reliability_score
-from .retrieval import build_chunks
+from .providers import build_provider
+from .providers.base import GenerateRequest, ModelMessage, ProviderError
+from .retrieval import build_chunks, text_similarity, tokenize
 
 ProviderKeyResolver = Callable[[str], Awaitable[Optional[str]]]
 
@@ -43,6 +45,14 @@ ABLATION_GROUPS = {
     "prompt robustness": ["prompt_flip_rate", "sycophancy_flip_rate"],
     "judge signals": ["judge_factuality_score", "judge_uncertainty_score"],
     "decision robustness": ["decision_robustness"],
+}
+
+BENCHMARKS = ["ragtruth", "selfcheck", "simpleqa"]
+MODES = ["dev", "test", "full"]
+OFFICIAL_SOURCES = {
+    "ragtruth": [RAGTRUTH_RESPONSE_URL, RAGTRUTH_SOURCE_URL, "https://github.com/ParticleMedia/RAGTruth"],
+    "selfcheck": [SELFCHECK_ROWS_URL, "https://github.com/potsawee/selfcheckgpt"],
+    "simpleqa": [SIMPLEQA_URL, "https://github.com/openai/simple-evals"],
 }
 
 
@@ -84,6 +94,34 @@ def load_benchmark_examples(
     return LoadedExamples(benchmark, _sample_examples(loaded.examples, limit, seed), loaded.notes)
 
 
+def filter_examples_for_mode(examples: List[EvalExample], mode: str, seed: int) -> List[EvalExample]:
+    if mode not in MODES:
+        raise ValueError("unsupported eval mode: %s" % mode)
+    if mode == "full":
+        return examples
+    selected = []
+    for example in examples:
+        if example.benchmark == "ragtruth":
+            split = str(example.metadata.get("split") or "").lower()
+            keep = split == "train" if mode == "dev" else split == "test"
+            if keep:
+                selected.append(example)
+            continue
+        bucket = stable_split_bucket(example.benchmark + ":" + example.example_id, seed)
+        if mode == "dev" and bucket < 0.70:
+            selected.append(example)
+        elif mode == "test" and bucket >= 0.70:
+            selected.append(example)
+    return selected
+
+
+def stable_split_bucket(text: str, seed: int) -> float:
+    import hashlib
+
+    digest = hashlib.sha256(("%s:%s" % (seed, text)).encode("utf-8")).hexdigest()
+    return int(digest[:12], 16) / float(16**12 - 1)
+
+
 def ragtruth_to_example(response: Dict[str, Any], source: Optional[Dict[str, Any]]) -> EvalExample:
     source = source or {}
     source_info = source.get("source_info")
@@ -110,6 +148,8 @@ def ragtruth_to_example(response: Dict[str, Any], source: Optional[Dict[str, Any
             "task_type": source.get("task_type"),
             "split": response.get("split"),
             "source": source.get("source"),
+            "response_model": response.get("model"),
+            "temperature": response.get("temperature"),
         },
     )
 
@@ -119,6 +159,7 @@ def selfcheck_to_example(record: Dict[str, Any]) -> EvalExample:
     bad_sentence_count = sum(1 for label in annotations if _selfcheck_label_is_bad(label))
     sentence_count = len(annotations)
     samples = _string_list(record.get("gpt3_text_samples"))[:20]
+    sentences = _string_list(record.get("gpt3_sentences"))
     return EvalExample(
         benchmark="selfcheck",
         example_id=str(record.get("wiki_bio_test_idx") or record.get("id") or "unknown"),
@@ -131,6 +172,7 @@ def selfcheck_to_example(record: Dict[str, Any]) -> EvalExample:
             "sentence_count": sentence_count,
             "bad_sentence_rate": bad_sentence_count / float(sentence_count or 1),
             "sentence_labels": annotations,
+            "sentence_texts": sentences,
         },
         metadata={
             "sample_answers": samples,
@@ -165,6 +207,7 @@ async def run_eval_example(
     live_provider: Optional[str] = None,
     model: Optional[str] = None,
     samples: int = 3,
+    allow_simpleqa_judge: bool = False,
 ) -> Dict[str, Any]:
     fixed_answer = example.answer is not None
     run_samples = max(1, min(5, samples))
@@ -197,6 +240,14 @@ async def run_eval_example(
         events.append(event)
     graph = events[-1]["graph"]
     labels = _labels_for_graph(example, graph)
+    if (
+        allow_simpleqa_judge
+        and example.benchmark.startswith("simpleqa")
+        and labels.get("simpleqa_grade") == "needs_review"
+        and live_provider
+    ):
+        judged = await _judge_simpleqa_ambiguous(example, graph["answer"]["final_answer"], live_provider, model, resolver)
+        labels.update(judged)
     metrics = _example_metrics(graph, labels)
     return redact_value(
         {
@@ -217,6 +268,63 @@ async def run_eval_example(
     )
 
 
+async def _judge_simpleqa_ambiguous(
+    example: EvalExample,
+    predicted: str,
+    provider_name: str,
+    model: Optional[str],
+    resolve_key: ProviderKeyResolver,
+) -> Dict[str, Any]:
+    api_key = await resolve_key(provider_name)
+    if not api_key:
+        return {"simpleqa_grader": "deterministic_needs_review_no_provider_key"}
+    prompt = (
+        "Grade a short factual answer. Return JSON only with "
+        '{"grade":"correct|incorrect|not_attempted|needs_review","why":"short string"}.\n\n'
+        "Question: %s\nGold answer: %s\nPredicted answer: %s"
+        % (example.question, example.gold_labels.get("target") or "", predicted[:1500])
+    )
+    try:
+        provider = build_provider(provider_name, api_key)
+        response = await provider.generate(
+            GenerateRequest(
+                messages=[
+                    ModelMessage(
+                        role="system",
+                        content=(
+                            "You are a conservative factual-answer grader. "
+                            "Use correct only when the prediction contains the gold answer or an unambiguous equivalent. "
+                            "Use not_attempted for refusals or no answer."
+                        ),
+                    ),
+                    ModelMessage(role="user", content=prompt),
+                ],
+                model=model,
+                temperature=0.0,
+                max_tokens=220,
+                response_format={"type": "json_object"},
+            )
+        )
+        data = json.loads(_json_object_text(response.text))
+    except (ProviderError, json.JSONDecodeError, ValueError) as exc:
+        return {
+            "simpleqa_grader": "provider_error",
+            "simpleqa_grader_error": redact_value(str(exc))[:180],
+        }
+    grade = str(data.get("grade") or "needs_review").strip().lower()
+    if grade not in {"correct", "incorrect", "not_attempted", "needs_review"}:
+        grade = "needs_review"
+    return {
+        "simpleqa_grade": grade,
+        "bad_answer": grade == "incorrect",
+        "is_correct": grade == "correct",
+        "include_in_calibration": grade != "needs_review",
+        "simpleqa_grader": "provider_practical",
+        "simpleqa_grader_provider": provider_name,
+        "simpleqa_grader_why": str(data.get("why") or "")[:300],
+    }
+
+
 async def _empty_key_resolver(_provider: str) -> Optional[str]:
     return None
 
@@ -233,10 +341,131 @@ def summarize_eval_results(results: List[Dict[str, Any]], notes: Optional[List[s
             "result_count": len(results),
             "benchmarks": by_benchmark,
             "overall": _summarize_group(results),
+            "baselines": baseline_report(results),
+            "benchmark_details": benchmark_detail_report(results),
             "ablations": ablation_report(results),
+            "calibration_curve": calibration_curve(results),
+            "risk_coverage_curve": risk_coverage_curve(results),
+            "fix_candidates": fix_candidate_report(results),
             "notes": notes or [],
         }
     )
+
+
+def baseline_report(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    baselines = ["full_score", "random_prior", "claim_support_only", "retrieval_lexical", "sample_consistency_only", "selfcheck_ngram"]
+    report: Dict[str, Any] = {}
+    for name in baselines:
+        items = []
+        for result in results:
+            value = baseline_risk_score(result, name)
+            correctness = result.get("metrics", {}).get("correctness")
+            if value is None or correctness is None:
+                continue
+            items.append(
+                {
+                    "metrics": {
+                        "risk_score": value,
+                        "score": 1.0 - value,
+                        "bad_answer": bool(result.get("metrics", {}).get("bad_answer")),
+                        "correctness": float(correctness),
+                        "false_safe": bool(result.get("metrics", {}).get("bad_answer")) and value <= 0.25,
+                    }
+                }
+            )
+        report[name] = _summarize_group(items)
+    return report
+
+
+def baseline_risk_score(result: Dict[str, Any], name: str) -> Optional[float]:
+    metrics = result.get("metrics") or {}
+    features = result.get("features") or {}
+    graph = result.get("graph") or {}
+    if name == "full_score":
+        return metrics.get("risk_score")
+    if name == "random_prior":
+        return 0.5
+    if name == "claim_support_only":
+        return 1.0 - float(features.get("claim_support_rate", 0.0))
+    if name == "retrieval_lexical":
+        evidence = graph.get("evidence") or []
+        if not evidence:
+            return 1.0
+        return 1.0 - max(float(item.get("relevance_score", 0.0)) for item in evidence)
+    if name == "sample_consistency_only":
+        return 1.0 - float(features.get("semantic_stability", 0.0))
+    if name == "selfcheck_ngram":
+        value = metrics.get("selfcheck_ngram_risk")
+        return float(value) if value is not None else None
+    return None
+
+
+def benchmark_detail_report(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {
+        "ragtruth": _ragtruth_details([item for item in results if item.get("benchmark") == "ragtruth"]),
+        "selfcheck": _selfcheck_details([item for item in results if item.get("benchmark") == "selfcheck"]),
+        "simpleqa": _simpleqa_details([item for item in results if str(item.get("benchmark", "")).startswith("simpleqa")]),
+    }
+
+
+def _ragtruth_details(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    task_groups: Dict[str, List[Dict[str, Any]]] = {}
+    model_groups: Dict[str, List[Dict[str, Any]]] = {}
+    label_type_counts: Dict[str, int] = {}
+    for result in results:
+        metadata = result.get("metadata") or {}
+        task_groups.setdefault(str(metadata.get("task_type") or "unknown"), []).append(result)
+        model_groups.setdefault(str(metadata.get("response_model") or "unknown"), []).append(result)
+        for label_type in result.get("labels", {}).get("label_types") or []:
+            label_type_counts[str(label_type)] = label_type_counts.get(str(label_type), 0) + 1
+    return {
+        "task_breakdown": {key: _summarize_group(value) for key, value in sorted(task_groups.items())},
+        "model_breakdown": {key: _summarize_group(value) for key, value in sorted(model_groups.items())},
+        "label_type_counts": label_type_counts,
+    }
+
+
+def _selfcheck_details(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    sentence_labels = []
+    sentence_risks = []
+    passage_bad_rates = []
+    passage_risks = []
+    ngram_risks = []
+    for result in results:
+        metrics = result.get("metrics") or {}
+        labels = result.get("labels") or {}
+        if metrics.get("selfcheck_ngram_risk") is not None:
+            ngram_risks.append(float(metrics["selfcheck_ngram_risk"]))
+        if labels.get("bad_sentence_rate") is not None:
+            passage_bad_rates.append(float(labels["bad_sentence_rate"]))
+            passage_risks.append(float(metrics.get("risk_score", 0.0)))
+        for item in metrics.get("sentence_items") or []:
+            is_nonfactual = 1 if item.get("is_nonfactual") else 0
+            sentence_labels.append(is_nonfactual)
+            sentence_risks.append(float(item.get("risk_score", 0.0)))
+    factual_labels = [1 - value for value in sentence_labels]
+    factual_scores = [1.0 - risk for risk in sentence_risks]
+    return {
+        "sentence_count": len(sentence_labels),
+        "sentence_nonfact_auprc": _rounded(average_precision(sentence_labels, sentence_risks)),
+        "sentence_nonfact_auroc": _rounded(auroc(sentence_labels, sentence_risks)),
+        "sentence_factual_auprc": _rounded(average_precision(factual_labels, factual_scores)),
+        "passage_pearson": _rounded(pearson(passage_risks, passage_bad_rates)),
+        "passage_spearman": _rounded(spearman(passage_risks, passage_bad_rates)),
+        "mean_selfcheck_ngram_risk": _rounded(_mean(ngram_risks)),
+    }
+
+
+def _simpleqa_details(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    grade_counts: Dict[str, int] = {}
+    grader_counts: Dict[str, int] = {}
+    for result in results:
+        labels = result.get("labels") or {}
+        grade = str(labels.get("simpleqa_grade") or "unknown")
+        grader = str(labels.get("simpleqa_grader") or "deterministic")
+        grade_counts[grade] = grade_counts.get(grade, 0) + 1
+        grader_counts[grader] = grader_counts.get(grader, 0) + 1
+    return {"grade_counts": grade_counts, "grader_counts": grader_counts}
 
 
 def ablation_report(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -267,11 +496,111 @@ def ablation_report(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+def calibration_curve(results: List[Dict[str, Any]], bins: int = 10) -> List[Dict[str, Any]]:
+    scored = [
+        item
+        for item in results
+        if item.get("metrics", {}).get("correctness") is not None
+    ]
+    rows = []
+    for index in range(bins):
+        low = index / float(bins)
+        high = (index + 1) / float(bins)
+        selected = [
+            item
+            for item in scored
+            if (low <= float(item["metrics"]["score"]) < high)
+            or (index == bins - 1 and float(item["metrics"]["score"]) == high)
+        ]
+        rows.append(
+            {
+                "range": "%.1f-%.1f" % (low, high),
+                "count": len(selected),
+                "avg_score": _rounded(_mean([float(item["metrics"]["score"]) for item in selected])),
+                "avg_correctness": _rounded(_mean([float(item["metrics"]["correctness"]) for item in selected])),
+            }
+        )
+    return rows
+
+
+def risk_coverage_curve(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    scored = [
+        item
+        for item in results
+        if item.get("metrics", {}).get("correctness") is not None
+    ]
+    rows = []
+    for threshold in [0.9, 0.8, 0.75, 0.7, 0.6, 0.5, 0.0]:
+        selected = [item for item in scored if float(item["metrics"]["score"]) >= threshold]
+        rows.append(
+            {
+                "threshold": threshold,
+                "coverage": _rounded(len(selected) / float(len(scored) or 1)),
+                "correctness": _rounded(_mean([float(item["metrics"]["correctness"]) for item in selected])),
+                "count": len(selected),
+            }
+        )
+    return rows
+
+
+def fix_candidate_report(results: List[Dict[str, Any]], limit: int = 30) -> List[Dict[str, Any]]:
+    candidates = []
+    for result in results:
+        metrics = result.get("metrics") or {}
+        labels = result.get("labels") or {}
+        if not metrics.get("bad_answer") and float(metrics.get("score", 0.0)) >= 0.6:
+            continue
+        root = _root_cause(result)
+        priority = _fix_priority(result, root)
+        candidates.append(
+            {
+                "benchmark": result.get("benchmark"),
+                "example_id": result.get("example_id"),
+                "score": result.get("score"),
+                "verdict": result.get("verdict"),
+                "label": _label_summary(labels),
+                "root_cause": root,
+                "priority": priority,
+            }
+        )
+    candidates.sort(key=lambda item: item["priority"], reverse=True)
+    return candidates[:limit]
+
+
+def _root_cause(result: Dict[str, Any]) -> str:
+    graph = result.get("graph") or {}
+    assessments = graph.get("claim_assessments") or []
+    metrics = result.get("metrics") or {}
+    labels = result.get("labels") or {}
+    if labels.get("simpleqa_grade") == "needs_review":
+        return "grading ambiguity"
+    if metrics.get("bad_answer") and not assessments:
+        return "claim extraction miss"
+    if metrics.get("bad_answer") and not metrics.get("relation_detected"):
+        if graph.get("evidence"):
+            return "contradiction miss"
+        return "retrieval miss"
+    if metrics.get("bad_answer") and float(metrics.get("score", 0.0)) >= 0.6:
+        return "score weighting/cap issue"
+    if not metrics.get("bad_answer") and float(metrics.get("score", 0.0)) < 0.55:
+        return "over-conservative scoring"
+    return "benchmark adapter issue"
+
+
+def _fix_priority(result: Dict[str, Any], root: str) -> float:
+    metrics = result.get("metrics") or {}
+    score = float(metrics.get("score", 0.0))
+    bad = bool(metrics.get("bad_answer"))
+    if bad:
+        return (score * 2.0) + (0.5 if root == "score weighting/cap issue" else 0.0)
+    return 1.0 - score
+
+
 def build_markdown_report(summary: Dict[str, Any], results: List[Dict[str, Any]]) -> str:
     lines = [
         "# ReliabilityGraph Eval Report",
         "",
-        "This report is a pilot benchmark audit, not a leaderboard claim. Scores are diagnostic.",
+        "This report is an official-style benchmark audit, not a leaderboard claim. Scores are diagnostic.",
         "",
         "## Setup",
         "",
@@ -302,6 +631,35 @@ def build_markdown_report(summary: Dict[str, Any], results: List[Dict[str, Any]]
                 _fmt(metrics.get("false_safe_rate")),
             )
         )
+    lines.extend(["", "## Baselines", ""])
+    lines.append("| Baseline | N | AUROC | AUPRC | F1 | False-safe |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+    for name, metrics in sorted((summary.get("baselines") or {}).items()):
+        lines.append(
+            "| %s | %d | %s | %s | %s | %s |"
+            % (
+                _escape_md(name),
+                metrics.get("scored_count", 0),
+                _fmt(metrics.get("auroc")),
+                _fmt(metrics.get("auprc")),
+                _fmt(metrics.get("best_f1")),
+                _fmt(metrics.get("false_safe_rate")),
+            )
+        )
+    lines.extend(["", "## Benchmark Details", ""])
+    details = summary.get("benchmark_details") or {}
+    ragtruth = details.get("ragtruth") or {}
+    if ragtruth:
+        lines.append("- RAGTruth label types: %s" % _escape_md(json.dumps(ragtruth.get("label_type_counts", {}), sort_keys=True)))
+        lines.append("- RAGTruth task breakdown: %s" % _escape_md(json.dumps(ragtruth.get("task_breakdown", {}), sort_keys=True)[:800]))
+    selfcheck = details.get("selfcheck") or {}
+    if selfcheck:
+        lines.append("- SelfCheck sentence NonFact AUC-PR: %s" % _fmt(selfcheck.get("sentence_nonfact_auprc")))
+        lines.append("- SelfCheck sentence Factual AUC-PR: %s" % _fmt(selfcheck.get("sentence_factual_auprc")))
+        lines.append("- SelfCheck passage Pearson/Spearman: %s / %s" % (_fmt(selfcheck.get("passage_pearson")), _fmt(selfcheck.get("passage_spearman"))))
+    simpleqa = details.get("simpleqa") or {}
+    if simpleqa:
+        lines.append("- SimpleQA grades: %s" % _escape_md(json.dumps(simpleqa.get("grade_counts", {}), sort_keys=True)))
     lines.extend(["", "## Ablations", ""])
     lines.append("| Signal removed | Avg score delta | Runs |")
     lines.append("| --- | ---: | ---: |")
@@ -324,6 +682,21 @@ def build_markdown_report(summary: Dict[str, Any], results: List[Dict[str, Any]]
                 _escape_md(result.get("verdict")),
                 _escape_md(_label_summary(labels)),
                 _escape_md((result.get("evidence_status") or "")[:160]),
+            )
+        )
+    lines.extend(["", "## Fix Candidates", ""])
+    fix_candidates = summary.get("fix_candidates") or []
+    if not fix_candidates:
+        lines.append("- No high-priority fix candidates found.")
+    for item in fix_candidates[:12]:
+        lines.append(
+            "- %s: %s example `%s` scored %s as `%s`."
+            % (
+                _escape_md(item["root_cause"]),
+                _escape_md(item["benchmark"]),
+                _escape_md(item["example_id"]),
+                _fmt(item["score"]),
+                _escape_md(item["verdict"]),
             )
         )
     lines.extend(
@@ -427,13 +800,23 @@ def _load_ragtruth(cache_dir: Path, offline: bool) -> LoadedExamples:
 def _load_selfcheck(cache_dir: Path, limit: Optional[int], offline: bool) -> LoadedExamples:
     notes: List[str] = []
     path = cache_dir / "selfcheck_rows.json"
-    if not path.exists() and not offline:
+    target_count = max(limit or 238, 1)
+    cached_rows = None
+    if path.exists():
         try:
-            rows = _download_selfcheck_rows(max(limit or 238, 1))
+            cached_rows = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            cached_rows = None
+    if (not path.exists() or (cached_rows is not None and len(cached_rows) < target_count)) and not offline:
+        try:
+            rows = _download_selfcheck_rows(target_count)
             path.write_text(json.dumps(rows), encoding="utf-8")
+            cached_rows = rows
             notes.append("Downloaded SelfCheckGPT WikiBio rows from Hugging Face datasets server.")
         except (OSError, urllib.error.URLError, ValueError) as exc:
             notes.append("SelfCheckGPT download failed: %s" % str(exc)[:180])
+    if cached_rows is not None:
+        return LoadedExamples("selfcheck", [selfcheck_to_example(row) for row in cached_rows], notes)
     if path.exists():
         rows = json.loads(path.read_text(encoding="utf-8"))
         return LoadedExamples("selfcheck", [selfcheck_to_example(row) for row in rows], notes)
@@ -470,6 +853,18 @@ def _download_text(url: str) -> str:
     if len(body) > MAX_DOWNLOAD_BYTES:
         raise ValueError("download exceeded %d bytes" % MAX_DOWNLOAD_BYTES)
     return body.decode("utf-8")
+
+
+def _json_object_text(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r"```$", "", cleaned).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
 
 
 def _download_selfcheck_rows(target_count: int) -> List[Dict[str, Any]]:
@@ -543,15 +938,74 @@ def _example_metrics(graph: Dict[str, Any], labels: Dict[str, Any]) -> Dict[str,
     relation_detected = any(
         item.get("relation") in {"not_found", "contradicted"} for item in graph.get("claim_assessments", [])
     )
+    sentence_items = _sentence_metric_items(graph, labels)
+    selfcheck_ngram = _selfcheck_ngram_risk(graph, labels)
     return {
         "score": score,
         "risk_score": 1.0 - score,
         "correctness": correctness_value,
         "bad_answer": bool(labels.get("bad_answer")),
         "relation_detected": relation_detected,
+        "sentence_items": sentence_items,
+        "selfcheck_ngram_risk": selfcheck_ngram,
         "false_safe": bool(labels.get("bad_answer"))
         and (graph["answer"].get("verdict") == "rely" or graph["answer"]["reliability_score"] >= 75),
     }
+
+
+def _sentence_metric_items(graph: Dict[str, Any], labels: Dict[str, Any]) -> List[Dict[str, Any]]:
+    sentences = _string_list(labels.get("sentence_texts"))
+    label_texts = _string_list(labels.get("sentence_labels"))
+    if not sentences or not label_texts:
+        return []
+    claims = graph.get("claims") or []
+    assessments = {item.get("claim_id"): item for item in graph.get("claim_assessments", [])}
+    items = []
+    for sentence, label in zip(sentences, label_texts):
+        best_claim = None
+        best_similarity = 0.0
+        for claim in claims:
+            similarity = text_similarity(sentence, claim.get("text", ""))
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_claim = claim
+        assessment = assessments.get(best_claim.get("claim_id")) if best_claim else None
+        if assessment:
+            risk = 1.0 - float(assessment.get("support_score", 0.0))
+            relation = assessment.get("relation")
+        else:
+            risk = 1.0
+            relation = "not_found"
+        items.append(
+            {
+                "label": label,
+                "is_nonfactual": _selfcheck_label_is_bad(label),
+                "risk_score": round(max(0.0, min(1.0, risk)), 4),
+                "relation": relation,
+                "matched_claim_id": best_claim.get("claim_id") if best_claim else None,
+                "match_similarity": round(best_similarity, 4),
+            }
+        )
+    return items
+
+
+def _selfcheck_ngram_risk(graph: Dict[str, Any], labels: Dict[str, Any]) -> Optional[float]:
+    sentences = _string_list(labels.get("sentence_texts"))
+    candidate_answers = graph.get("disagreement", {}).get("candidate_answers") or []
+    samples = [item.get("answer_text", "") for item in candidate_answers[1:]]
+    if not sentences or not samples:
+        return None
+    sentence_risks = []
+    for sentence in sentences:
+        best_overlap = 0.0
+        left = set(tokenize(sentence))
+        for sample in samples:
+            for sample_sentence in re.split(r"(?<=[.!?])\s+", sample):
+                right = set(tokenize(sample_sentence))
+                if left and right:
+                    best_overlap = max(best_overlap, len(left & right) / float(len(left | right)))
+        sentence_risks.append(1.0 - best_overlap)
+    return round(_mean(sentence_risks) or 0.0, 4)
 
 
 def _summarize_group(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -572,6 +1026,8 @@ def _summarize_group(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "mean_correctness": _rounded(_mean(correctness)),
         "auroc": _rounded(auroc(labels, risk_scores)),
         "auprc": _rounded(average_precision(labels, risk_scores)),
+        "best_f1": _rounded(best_f1(labels, risk_scores)[0]),
+        "best_f1_threshold": _rounded(best_f1(labels, risk_scores)[1]),
         "spearman_score_correctness": _rounded(spearman(scores, correctness)),
         "ece": _rounded(expected_calibration_error(scores, correctness)),
         "brier": _rounded(brier_score(scores, correctness)),
@@ -609,6 +1065,25 @@ def average_precision(labels: List[int], scores: List[float]) -> Optional[float]
             hits += 1
             precision_sum += hits / float(index)
     return precision_sum / float(positives)
+
+
+def best_f1(labels: List[int], scores: List[float]) -> Tuple[Optional[float], Optional[float]]:
+    if not labels or len(labels) != len(scores) or sum(labels) == 0:
+        return None, None
+    best = 0.0
+    best_threshold = None
+    for threshold in sorted(set(scores)):
+        predictions = [1 if score >= threshold else 0 for score in scores]
+        true_positive = sum(1 for pred, label in zip(predictions, labels) if pred == 1 and label == 1)
+        false_positive = sum(1 for pred, label in zip(predictions, labels) if pred == 1 and label == 0)
+        false_negative = sum(1 for pred, label in zip(predictions, labels) if pred == 0 and label == 1)
+        precision = true_positive / float(true_positive + false_positive or 1)
+        recall = true_positive / float(true_positive + false_negative or 1)
+        f1 = (2 * precision * recall / (precision + recall)) if precision + recall else 0.0
+        if f1 > best:
+            best = f1
+            best_threshold = threshold
+    return best, best_threshold
 
 
 def spearman(left: List[float], right: List[float]) -> Optional[float]:
