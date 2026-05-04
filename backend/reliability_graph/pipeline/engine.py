@@ -470,7 +470,7 @@ class ReliabilityPipeline:
         raise ProviderError(last_error)
 
     def _fallback_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        sentences = self._sentences(state["answer"]["final_answer"])
+        sentences = self._claim_units(state["answer"]["final_answer"])
         claims: List[Dict[str, Any]] = []
         for sentence in sentences:
             if len(claims) >= 8:
@@ -501,6 +501,26 @@ class ReliabilityPipeline:
                 }
             )
         return claims
+
+    def _claim_units(self, text: str) -> List[str]:
+        units: List[str] = []
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            line = re.sub(r"^[-*•]\s*", "", line).strip()
+            if not line:
+                continue
+            if len(tokenize(line)) >= 5:
+                units.extend(self._sentences(line))
+        if not units:
+            units = self._sentences(text)
+        expanded: List[str] = []
+        for unit in units:
+            parts = re.split(r"\s+(?:and|therefore,?)\s+", unit, flags=re.IGNORECASE) if len(tokenize(unit)) > 35 else [unit]
+            for part in parts:
+                cleaned = part.strip(" .,:;")
+                if len(tokenize(cleaned)) >= 5 and cleaned not in expanded:
+                    expanded.append(cleaned)
+        return expanded
 
     def _extract_assumptions(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         question = state["run"]["question"]
@@ -707,18 +727,25 @@ class ReliabilityPipeline:
     def _score(self, state: Dict[str, Any]) -> Tuple[Dict[str, float], int, List[str]]:
         assessments = state["claim_assessments"]
         total = float(len(assessments) or 1)
-        supported = len([a for a in assessments if a["status"] in ["supported", "partially_supported"]])
+        support_points = sum(
+            1.0 if a["status"] == "supported" else 0.30 if a["status"] == "partially_supported" else 0.0
+            for a in assessments
+        )
         contradicted = len([a for a in assessments if a["status"] == "contradicted"])
         insufficient = len([a for a in assessments if a["status"] == "insufficient_evidence"])
         decision_margin = state["decision_analysis"].get("decision_margin", 0.0) if state["decision_analysis"]["applicable"] else 0.5
         source_quality = self._source_quality_score(state["evidence"])
+        retrieval_alignment = self._retrieval_alignment_score(state)
+        sample_overlap = self._sample_overlap_stability(state["candidate_answers"])
         prompt_flip_rate = self._prompt_flip_rate(state.get("perturbation_probe", {}).get("results") or state.get("stress_tests", []))
         features = {
-            "claim_support_rate": supported / total,
+            "claim_support_rate": support_points / total,
             "contradiction_rate": contradicted / total,
             "insufficient_evidence_rate": insufficient / total,
             "semantic_stability": state["semantic_stability"],
+            "sample_overlap_stability": sample_overlap,
             "source_quality_score": source_quality,
+            "retrieval_alignment_score": retrieval_alignment,
             "sample_disagreement_rate": 1.0 - state["semantic_stability"],
             "prompt_flip_rate": prompt_flip_rate,
             "sycophancy_flip_rate": state["sycophancy_flip_rate"],
@@ -749,6 +776,46 @@ class ReliabilityPipeline:
         }
         score, applied = compute_reliability_score(features, caps)
         return features, score, applied
+
+    def _retrieval_alignment_score(self, state: Dict[str, Any]) -> float:
+        if not self.retrieval_chunks:
+            return 0.0
+        evidence_by_claim = {}
+        for item in state.get("evidence", []):
+            evidence_by_claim.setdefault(item["claim_id"], []).append(item)
+        scores = []
+        for claim in state.get("claims", []):
+            matches = evidence_by_claim.get(claim["claim_id"], [])
+            if not matches:
+                scores.append(0.0)
+                continue
+            best = max(float(item.get("relevance_score", 0.0)) for item in matches)
+            if any(item.get("support_relation") == "contradicts" for item in matches):
+                best *= 0.25
+            scores.append(max(0.0, min(1.0, best)))
+        return round(sum(scores) / float(len(scores) or 1), 4)
+
+    def _sample_overlap_stability(self, candidates: List[Dict[str, Any]]) -> float:
+        if len(candidates) <= 1:
+            return 0.5
+        primary_sentences = self._sentences(candidates[0].get("answer_text", ""))
+        other_sentences = []
+        for candidate in candidates[1:]:
+            other_sentences.extend(self._sentences(candidate.get("answer_text", "")))
+        if not primary_sentences or not other_sentences:
+            return 0.0
+        sentence_scores = []
+        for sentence in primary_sentences[:12]:
+            best = max(self._token_overlap(sentence, other) for other in other_sentences)
+            sentence_scores.append(best)
+        return round(sum(sentence_scores) / float(len(sentence_scores) or 1), 4)
+
+    def _token_overlap(self, left: str, right: str) -> float:
+        left_tokens = set(tokenize(left))
+        right_tokens = set(tokenize(right))
+        if not left_tokens or not right_tokens:
+            return 0.0
+        return len(left_tokens & right_tokens) / float(len(left_tokens | right_tokens))
 
     def _calibration(self) -> Dict[str, Any]:
         if self.calibration_report.get("label_count", 0) <= 0:

@@ -2,14 +2,16 @@ from typing import Any, Dict, List, Tuple
 
 
 WEIGHTS = {
-    "claim_support_rate": 0.22,
-    "semantic_stability": 0.13,
-    "source_quality_score": 0.12,
-    "judge_factuality_score": 0.10,
-    "judge_uncertainty_score": 0.10,
-    "sycophancy_resistance": 0.10,
-    "prompt_robustness": 0.08,
-    "decision_robustness": 0.08,
+    "claim_support_rate": 0.10,
+    "retrieval_alignment_score": 0.28,
+    "sample_overlap_stability": 0.22,
+    "semantic_stability": 0.04,
+    "source_quality_score": 0.06,
+    "judge_factuality_score": 0.06,
+    "judge_uncertainty_score": 0.05,
+    "sycophancy_resistance": 0.05,
+    "prompt_robustness": 0.04,
+    "decision_robustness": 0.03,
     "trace_completeness": 0.07,
 }
 
@@ -17,6 +19,8 @@ WEIGHTS = {
 def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) -> Tuple[int, List[str]]:
     raw = (
         WEIGHTS["claim_support_rate"] * features.get("claim_support_rate", 0.0)
+        + WEIGHTS["retrieval_alignment_score"] * features.get("retrieval_alignment_score", features.get("source_quality_score", 0.0))
+        + WEIGHTS["sample_overlap_stability"] * features.get("sample_overlap_stability", features.get("semantic_stability", 0.0))
         + WEIGHTS["semantic_stability"] * features.get("semantic_stability", 0.0)
         + WEIGHTS["source_quality_score"] * features.get("source_quality_score", 0.0)
         + WEIGHTS["judge_factuality_score"] * features.get("judge_factuality_score", 0.0)
@@ -44,6 +48,18 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
     if features.get("semantic_stability", 1.0) < 0.45:
         score = min(score, 75)
         applied.append("high semantic disagreement: score capped at 75")
+
+    if features.get("sample_overlap_stability", 1.0) < 0.35:
+        score = min(score, 55)
+        applied.append("low sample evidence overlap: score capped at 55")
+
+    if (
+        features.get("source_quality_score", 0.0) <= 0.30
+        and features.get("sample_overlap_stability", 1.0) <= 0.50
+        and features.get("retrieval_alignment_score", 0.0) < 0.80
+    ):
+        score = min(score, 70)
+        applied.append("low-provenance single-sample evidence: score capped at 70")
 
     if features.get("sycophancy_flip_rate", 0.0) > 0.5:
         score = min(score, 65)

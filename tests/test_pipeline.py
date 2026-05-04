@@ -56,6 +56,20 @@ def test_pipeline_builds_complete_decision_graph():
     assert "likely correct" not in json.dumps(graph).lower()
 
 
+def test_fallback_claim_units_split_bulleted_answers():
+    pipeline = ReliabilityPipeline()
+
+    units = pipeline._claim_units(
+        "The flag represents:\n"
+        "* A symbol of LGBT pride and LGBT social movements.\n"
+        "* A hybrid of the rainbow flag and the national flag of South Africa, used in Cape Town in 2010.\n"
+        "Therefore, it represents a unifying symbol."
+    )
+
+    assert len(units) >= 2
+    assert any("hybrid of the rainbow flag" in unit for unit in units)
+
+
 def test_pipeline_marks_perturbation_probe_unavailable_without_live_provider():
     events = run_pipeline(
         base_run(

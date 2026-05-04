@@ -46,3 +46,25 @@ def test_score_caps_missing_current_evidence():
 
     assert score == 65
     assert any("no evidence retrieval" in cap for cap in caps)
+
+
+def test_score_caps_low_sample_overlap():
+    features = perfect_features()
+    features["sample_overlap_stability"] = 0.2
+
+    score, caps = compute_reliability_score(features, {})
+
+    assert score == 55
+    assert any("low sample evidence overlap" in cap for cap in caps)
+
+
+def test_score_caps_low_provenance_single_sample_evidence():
+    features = perfect_features()
+    features["source_quality_score"] = 0.25
+    features["sample_overlap_stability"] = 0.5
+    features["retrieval_alignment_score"] = 0.72
+
+    score, caps = compute_reliability_score(features, {})
+
+    assert score == 70
+    assert any("low-provenance single-sample evidence" in cap for cap in caps)
