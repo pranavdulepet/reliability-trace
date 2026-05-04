@@ -53,6 +53,10 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
         score = min(score, 65)
         applied.append("high-impact claim lacks source support: score capped at 65")
 
+    if caps.get("evidence_required") and int(caps.get("partial_support_claims", 0)) > 0:
+        score = min(score, 74)
+        applied.append("some checkable claims only have partial source support: score capped at 74")
+
     if features.get("semantic_stability", 1.0) < 0.45:
         score = min(score, 75)
         applied.append("high semantic disagreement: score capped at 75")
@@ -60,6 +64,10 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
     if features.get("sample_overlap_stability", 1.0) < 0.35:
         score = min(score, 55)
         applied.append("low sample evidence overlap: score capped at 55")
+
+    if features.get("sample_conflict_rate", 0.0) >= 0.5:
+        score = min(score, 60)
+        applied.append("candidate answers conflict on numbers or recommendation polarity: score capped at 60")
 
     if (
         features.get("source_quality_score", 0.0) <= 0.30

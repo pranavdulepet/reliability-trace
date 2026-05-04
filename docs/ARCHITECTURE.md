@@ -48,7 +48,7 @@ The pipeline emits provider-neutral verdict fields on every completed graph:
 - `run.search_used`
 - `web_search.calls[]`
 
-Reliability scoring is diagnostic. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`.
+Reliability scoring is diagnostic. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
 
 ## Frontend
 

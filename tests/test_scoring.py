@@ -72,6 +72,26 @@ def test_score_caps_low_sample_overlap():
     assert any("low sample evidence overlap" in cap for cap in caps)
 
 
+def test_score_caps_partial_source_support_below_rely_threshold():
+    score, caps = compute_reliability_score(
+        perfect_features(),
+        {"evidence_required": True, "partial_support_claims": 1},
+    )
+
+    assert score == 74
+    assert any("partial source support" in cap for cap in caps)
+
+
+def test_score_caps_candidate_answer_conflicts():
+    features = perfect_features()
+    features["sample_conflict_rate"] = 1.0
+
+    score, caps = compute_reliability_score(features, {})
+
+    assert score == 60
+    assert any("candidate answers conflict" in cap for cap in caps)
+
+
 def test_score_caps_low_provenance_single_sample_evidence():
     features = perfect_features()
     features["source_quality_score"] = 0.25

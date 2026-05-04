@@ -10,6 +10,7 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 | `source_quality_score` | Useful diagnostic | Separates higher-provenance source matches from weak snippets before the score can rise. | Source quality is heuristic; it needs benchmark calibration and better domain/source reputation models. |
 | `sample_consistency` | Directional signal | Inspired by SelfCheckGPT. Multiple samples are compared for answer stability. | Models can agree on the same false claim, so agreement cannot replace external evidence for factual/current answers. |
 | `semantic_entropy` | Directional signal | Inspired by semantic entropy work. The system tracks answer-meaning disagreement instead of treating every wording difference as important. | Current clustering is a lightweight approximation, not a full entailment-based semantic entropy implementation. |
+| `sample_conflict_rate` | Useful guardrail | Candidate answers are checked for obvious numeric changes and recommendation-polarity flips before they can be treated as stable. | This catches simple conflicts only; it is not a general contradiction detector. |
 | `perturbation_check` | Directional live robustness signal | Behavioral pressure prompts test whether the answer flips under paraphrase, false-premise, or authority pressure. | This is observable provider behavior only; it is not hidden reasoning access and is not exhaustive. |
 | `calibration` | Valid only after labels | Inspired by reliability diagrams, ECE, and Brier score. User-labeled runs produce local calibration reports. | Until enough local labels exist, the score is an uncalibrated diagnostic, not a probability. |
 | `observable_activity` | Auditability signal, not a truth signal | Inspired by unfaithful chain-of-thought findings. The UI shows observable steps, calls, outputs, checks, and scores. | Activity completeness does not make an answer true and is not part of the reliability score. |
@@ -20,6 +21,7 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 - Fake decision utilities and criterion weights were removed. Decision analysis now shows qualitative options, evidence status, basis, and risk.
 - Trace completeness is no longer a score feature. It is useful for debugging and transparency, not factual reliability.
 - A single high-scoring retrieved chunk no longer dominates the score. Claim support, retrieval alignment, source quality, and sample consistency share the score.
+- Missing sources are handled differently by question type: they block current, high-stakes, and source-required factual answers, but only mark general explanations as not source-grounded.
 
 ## Benchmark Direction
 

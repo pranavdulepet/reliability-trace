@@ -102,7 +102,28 @@ def test_explanation_question_is_not_forced_into_decision_or_source_required_cap
     assert graph["decision_analysis"]["applicable"] is False
     assert graph["features"]["evidence_required"] == 0.0
     assert graph["answer"]["verdict"] == "use_with_caution"
+    assert graph["answer"]["reliability_score"] >= 50
+    assert "factual details are not externally verified" in graph["answer"]["main_uncertainty"]
     assert not any("source-required question" in cap for cap in graph["score_caps"])
+    assert not any("high-impact claim" in signal for signal in graph["answer"]["top_negative_signals"])
+
+
+def test_sample_conflict_detects_same_words_with_different_numbers():
+    pipeline = ReliabilityPipeline()
+    candidates = [
+        {"answer_text": "Python 3.14.4 is the latest stable release today."},
+        {"answer_text": "Python 3.12.10 is the latest stable release today."},
+    ]
+
+    assert pipeline._sample_conflict_rate(candidates) == 1.0
+    clusters, stability, _entropy = pipeline._cluster_candidates(
+        [
+            {"candidate_id": "cand_1", "answer_text": candidates[0]["answer_text"]},
+            {"candidate_id": "cand_2", "answer_text": candidates[1]["answer_text"]},
+        ]
+    )
+    assert len(clusters) == 2
+    assert stability == 0.0
 
 
 def test_pipeline_uses_document_evidence_for_claim_matching():

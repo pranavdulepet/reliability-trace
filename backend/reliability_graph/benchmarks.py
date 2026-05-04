@@ -8,7 +8,7 @@ ABLATION_GROUPS = {
     "claim support": ["claim_support_rate"],
     "retrieval support": ["retrieval_alignment_score", "retrieval_peak_score"],
     "source quality": ["source_quality_score"],
-    "sample consistency": ["sample_overlap_stability", "semantic_stability"],
+    "sample consistency": ["sample_overlap_stability", "semantic_stability", "sample_conflict_rate"],
 }
 
 
