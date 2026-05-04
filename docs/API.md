@@ -50,6 +50,37 @@ Lists encrypted saved key fingerprints.
 
 Deletes the saved local key for the current user.
 
+## Web Search
+
+`GET /api/search-preferences`
+
+Returns the default search mode, result cap, and search-key fingerprint.
+
+`PUT /api/search-preferences`
+
+```json
+{
+  "search_mode": "auto",
+  "max_results": 6
+}
+```
+
+`search_mode` is `auto`, `always`, or `off`.
+
+`POST /api/search-key`
+
+```json
+{
+  "api_key": "tvly-..."
+}
+```
+
+Stores the web retrieval key encrypted server-side. The search provider discovers source evidence only; the configured LLM provider still writes the answer.
+
+`DELETE /api/search-key`
+
+Deletes the saved web retrieval key.
+
 ## Runs
 
 `POST /api/runs`
@@ -63,7 +94,8 @@ Deletes the saved local key for the current user.
   "max_cost_usd": 1.0,
   "use_live_provider": true,
   "conversation_id": "conv_...",
-  "attachment_document_ids": ["doc_..."]
+  "attachment_document_ids": ["doc_..."],
+  "search_mode": "auto"
 }
 ```
 
@@ -108,11 +140,14 @@ Returns a thread and messages. Assistant messages include the linked run graph w
 ```json
 {
   "content": "Can I trust this answer?",
-  "attachment_document_ids": ["doc_..."]
+  "attachment_document_ids": ["doc_..."],
+  "search_mode": "auto"
 }
 ```
 
 Creates a user message and queued reliability run. Stream `/api/runs/{run_id}/events` to complete the answer.
+
+`search_mode` can be omitted to use Settings. `auto` lets the backend choose no retrieval, attachments only, web search, or hybrid retrieval from the message and attachments.
 
 ## Documents
 

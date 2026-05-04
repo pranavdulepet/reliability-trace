@@ -11,6 +11,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Answer-specific verdicts, evidence status, uncertainty, next action, source limitations, and claim relations.
 - Provider-backed structured claim extraction with strict JSON validation and retry on invalid JSON, with deterministic fallback.
 - Source ingestion for chat file/URL attachments, chunking, local hashed retrieval vectors, and chunk search.
+- Research router with quiet Auto search, manual On/Off override, Tavily-backed web retrieval, source dedupe, search activity, citations, and graph fields for search mode/search use.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
 - Live provider perturbation checks for connected provider runs.
@@ -20,7 +21,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Not Complete
 
-- Broad web search with source discovery, dedupe, freshness handling, and hostile-document defenses beyond source-bound snippets.
+- Multi-provider search abstraction beyond Tavily, domain/source reputation classifiers, and richer freshness scoring.
 - Provider-backed structured evidence assessment, assumption extraction, and judge rubrics across providers.
 - Full logprob-based robustness measurements.
 - Large empirical benchmark calibration for score quality, risk coverage, and ablations.
@@ -30,7 +31,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Highest-Leverage Strengthenings
 
-- Add broad web search next: source discovery, dedupe, freshness scoring, robots/rate-limit handling, and source-type classifiers.
+- Strengthen web search next: source reputation, richer query planning, follow-up searches when first-pass evidence is weak, robots/rate-limit handling, and source-type classifiers.
 - Expand the benchmark harness: labeled datasets, run manifests, calibration plots, risk coverage, and task-specific reports.
 - Add full logprob robustness probes where provider APIs expose the needed measurements.
 - Keep the UI progressive: ask first, reveal provider/options only when useful, keep evidence tables dense but calm, and move research-heavy detail behind tabs or About.
