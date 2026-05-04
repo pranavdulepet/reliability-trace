@@ -9,6 +9,8 @@ import type {
   ProviderPreferenceResponse,
   RunCreate,
   RunView,
+  SearchMode,
+  SearchPreferenceResponse,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -65,6 +67,31 @@ export async function saveProviderPreference(payload: {
   });
 }
 
+export async function getSearchPreference(): Promise<SearchPreferenceResponse> {
+  return request<SearchPreferenceResponse>("/api/search-preferences");
+}
+
+export async function saveSearchPreference(payload: {
+  search_mode: SearchMode;
+  max_results: number;
+}): Promise<SearchPreferenceResponse> {
+  return request<SearchPreferenceResponse>("/api/search-preferences", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function saveSearchKey(apiKey: string): Promise<SearchPreferenceResponse["key"]> {
+  return request<SearchPreferenceResponse["key"]>("/api/search-key", {
+    method: "POST",
+    body: JSON.stringify({ api_key: apiKey }),
+  });
+}
+
+export async function deleteSearchKey(): Promise<void> {
+  await request<{ deleted: boolean }>("/api/search-key", { method: "DELETE" });
+}
+
 export async function createRun(payload: RunCreate): Promise<RunView> {
   return request<RunView>("/api/runs", {
     method: "POST",
@@ -102,6 +129,7 @@ export async function sendConversationMessage(
   payload: {
     content: string;
     attachment_document_ids: string[];
+    search_mode?: SearchMode;
   },
 ): Promise<{ message: ConversationMessage; run: RunView }> {
   return request<{ message: ConversationMessage; run: RunView }>(`/api/conversations/${conversationId}/messages`, {

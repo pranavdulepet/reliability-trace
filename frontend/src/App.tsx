@@ -3,20 +3,24 @@ import { createRoot } from "react-dom/client";
 import {
   createConversation,
   deleteKey,
+  deleteSearchKey,
   fetchSourceUrl,
   getConversation,
   getConversations,
   getKeys,
   getProviderPreference,
   getProviders,
+  getSearchPreference,
   runEventSource,
   saveKey,
   saveProviderPreference,
+  saveSearchKey,
+  saveSearchPreference,
   sendConversationMessage,
   uploadDocument,
 } from "./api";
-import { ActivityTrace, ChatComposer, ConversationList, KeyManager, ProviderSettings, formatTraceOutput } from "./components";
-import { ReliabilityCards, ReliabilityDetails } from "./report";
+import { ActivityTrace, ChatComposer, ConversationList, KeyManager, ProviderSettings, SearchSettings, formatTraceOutput } from "./components";
+import { AnswerCitations, ReliabilityCards, ReliabilityDetails } from "./report";
 import type {
   ConversationMessage,
   ConversationSummary,
@@ -26,6 +30,8 @@ import type {
   ProviderMetadata,
   ProviderPreferenceResponse,
   ReliabilityGraph,
+  SearchMode,
+  SearchPreferenceResponse,
   StreamEvent,
 } from "./types";
 import "./styles.css";
@@ -50,6 +56,7 @@ function App() {
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [keys, setKeys] = useState<ProviderKeyView[]>([]);
   const [preference, setPreference] = useState<ProviderPreferenceResponse | null>(null);
+  const [searchPreference, setSearchPreference] = useState<SearchPreferenceResponse | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ConversationView | null>(null);
@@ -57,6 +64,8 @@ function App() {
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const [keyProvider, setKeyProvider] = useState("");
   const [keyValue, setKeyValue] = useState("");
+  const [searchKeyValue, setSearchKeyValue] = useState("");
+  const [draftSearchMode, setDraftSearchMode] = useState<SearchMode>("auto");
   const [view, setView] = useState<View>("chat");
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
@@ -81,16 +90,19 @@ function App() {
   const progress = events.length === 0 ? 0 : events[events.length - 1].progress ?? 0;
 
   async function refreshWorkspace() {
-    const [nextProviders, nextKeys, nextPreference, nextConversations] = await Promise.all([
+    const [nextProviders, nextKeys, nextPreference, nextSearchPreference, nextConversations] = await Promise.all([
       getProviders(),
       getKeys(),
       getProviderPreference(),
+      getSearchPreference(),
       getConversations(),
     ]);
     setProviders(nextProviders);
     setKeys(nextKeys);
     setPreference(nextPreference);
+    setSearchPreference(nextSearchPreference);
     setConversations(nextConversations);
+    setDraftSearchMode((current) => (current === "auto" ? nextSearchPreference.preference.search_mode : current));
     setKeyProvider((current) => {
       if (nextProviders.some((provider) => provider.provider === current && isRealProvider(provider))) return current;
       return nextProviders.find(isRealProvider)?.provider ?? current;
@@ -147,6 +159,39 @@ function App() {
     try {
       setPreference(await saveProviderPreference(payload));
       await refreshWorkspace();
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  async function handleSaveSearchKey(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    try {
+      await saveSearchKey(searchKeyValue);
+      setSearchKeyValue("");
+      setSearchPreference(await getSearchPreference());
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  async function handleDeleteSearchKey() {
+    setError(null);
+    try {
+      await deleteSearchKey();
+      setSearchPreference(await getSearchPreference());
+    } catch (err) {
+      showError(err);
+    }
+  }
+
+  async function handleSaveSearchPreference(payload: { search_mode: SearchMode; max_results: number }) {
+    setError(null);
+    try {
+      const nextPreference = await saveSearchPreference(payload);
+      setSearchPreference(nextPreference);
+      setDraftSearchMode((current) => (current === "auto" ? nextPreference.preference.search_mode : current));
     } catch (err) {
       showError(err);
     }
@@ -239,6 +284,7 @@ function App() {
       const response = await sendConversationMessage(conversationId, {
         content,
         attachment_document_ids: documentIds,
+        search_mode: draftSearchMode,
       });
       setDraft("");
       setAttachments([]);
@@ -338,6 +384,12 @@ function App() {
             onSaveKey={handleSaveKey}
             onDeleteKey={handleDeleteKey}
             onSavePreference={handleSavePreference}
+            searchPreference={searchPreference}
+            searchKeyValue={searchKeyValue}
+            setSearchKeyValue={setSearchKeyValue}
+            onSaveSearchKey={handleSaveSearchKey}
+            onDeleteSearchKey={handleDeleteSearchKey}
+            onSaveSearchPreference={handleSaveSearchPreference}
           />
         ) : view === "about" ? (
           <AboutView />
@@ -353,6 +405,8 @@ function App() {
             busy={busy}
             providerReady={providerReady}
             connectedProviderCount={connectedProviders.length}
+            searchMode={draftSearchMode}
+            setSearchMode={setDraftSearchMode}
             setDraft={setDraft}
             onSubmit={handleSubmit}
             onAddFiles={handleAddFiles}
@@ -377,6 +431,8 @@ function ChatView({
   busy,
   providerReady,
   connectedProviderCount,
+  searchMode,
+  setSearchMode,
   setDraft,
   onSubmit,
   onAddFiles,
@@ -394,6 +450,8 @@ function ChatView({
   busy: boolean;
   providerReady: boolean;
   connectedProviderCount: number;
+  searchMode: SearchMode;
+  setSearchMode: (value: SearchMode) => void;
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
@@ -425,6 +483,8 @@ function ChatView({
         busy={busy}
         providerReady={providerReady}
         connectedProviderCount={connectedProviderCount}
+        searchMode={searchMode}
+        onSearchModeChange={setSearchMode}
         onChange={setDraft}
         onSubmit={onSubmit}
         onAddFiles={onAddFiles}
@@ -457,6 +517,7 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
         <p>{message.content}</p>
         {graph && (
           <>
+            <AnswerCitations graph={graph} />
             <GraphActivity graph={graph} />
             <ReliabilityCards graph={graph} />
             <ReliabilityDetails graph={graph} />
@@ -504,6 +565,7 @@ function PendingAssistant({ events, graph, progress }: { events: StreamEvent[]; 
         {graph && (
           <>
             <p>{graph.answer.final_answer}</p>
+            <AnswerCitations graph={graph} />
             <ReliabilityCards graph={graph} />
           </>
         )}
@@ -524,6 +586,12 @@ function SettingsView(props: {
   onSaveKey: (event: FormEvent) => void;
   onDeleteKey: (provider: string) => void;
   onSavePreference: (payload: { provider: string | null; model: string | null; samples: number; max_cost_usd: number }) => void;
+  searchPreference: SearchPreferenceResponse | null;
+  searchKeyValue: string;
+  setSearchKeyValue: (value: string) => void;
+  onSaveSearchKey: (event: FormEvent) => void;
+  onDeleteSearchKey: () => void;
+  onSaveSearchPreference: (payload: { search_mode: SearchMode; max_results: number }) => void;
 }) {
   return (
     <div className="settings-page">
@@ -547,6 +615,14 @@ function SettingsView(props: {
           connectedProviders={props.connectedProviders}
           preference={props.preference}
           onSave={props.onSavePreference}
+        />
+        <SearchSettings
+          preference={props.searchPreference}
+          keyValue={props.searchKeyValue}
+          setKeyValue={props.setSearchKeyValue}
+          onSaveKey={props.onSaveSearchKey}
+          onDeleteKey={props.onDeleteSearchKey}
+          onSavePreference={props.onSaveSearchPreference}
         />
       </div>
     </div>

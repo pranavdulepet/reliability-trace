@@ -1,4 +1,5 @@
 export type KeyState = "saved" | "env" | "missing" | "not_required";
+export type SearchMode = "auto" | "always" | "off";
 
 export interface ProviderMetadata {
   provider: string;
@@ -28,6 +29,7 @@ export interface RunCreate {
   user_message_id?: string | null;
   prior_context?: Array<{ role: string; content: string }>;
   attachment_document_ids?: string[];
+  search_mode?: SearchMode;
 }
 
 export interface RunView extends RunCreate {
@@ -70,6 +72,27 @@ export interface ProviderPreference {
 export interface ProviderPreferenceResponse {
   preference: ProviderPreference;
   resolved: ProviderPreference | null;
+}
+
+export interface SearchKeyView {
+  provider: "tavily";
+  fingerprint: string | null;
+  status: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  key_state: "saved" | "env" | "missing";
+  key_env_var: string;
+}
+
+export interface SearchPreference {
+  search_mode: SearchMode;
+  max_results: number;
+  updated_at: string | null;
+}
+
+export interface SearchPreferenceResponse {
+  preference: SearchPreference;
+  key: SearchKeyView;
 }
 
 export interface ConversationSummary {
@@ -142,6 +165,16 @@ export interface EvidenceItem {
   source_quality: string;
 }
 
+export interface AnswerCitation {
+  citation_id: string;
+  evidence_id: string | null;
+  claim_id: string | null;
+  title: string;
+  url: string | null;
+  source_type: string;
+  snippet: string;
+}
+
 export interface ClaimAssessment {
   claim_id: string;
   status: string;
@@ -186,6 +219,7 @@ export interface ReliabilityGraph {
     run_id: string;
     conversation_id?: string | null;
     attachment_document_ids?: string[];
+    web_search_document_ids?: string[];
     question: string;
     question_type: string;
     provider: string;
@@ -193,6 +227,8 @@ export interface ReliabilityGraph {
     samples: number;
     max_cost_usd: number;
     use_live_provider: boolean;
+    search_mode?: SearchMode;
+    search_used?: boolean;
   };
   answer: {
     final_answer: string;
@@ -201,10 +237,12 @@ export interface ReliabilityGraph {
     reliability_score: number;
     calibration_status: string;
     verdict?: "rely" | "use_with_caution" | "do_not_rely";
+    final_decision?: "rely" | "use_with_caution" | "do_not_rely";
     verdict_reason?: string;
     next_best_action?: string;
     evidence_status?: string;
     source_limitations?: string;
+    citations?: AnswerCitation[];
     top_positive_signals: string[];
     top_negative_signals: string[];
     main_uncertainty: string;
@@ -232,6 +270,24 @@ export interface ReliabilityGraph {
   };
   stress_tests: StressTest[];
   trace: TraceSpan[];
+  web_search?: {
+    route: {
+      route: "no_search" | "attachments_only" | "web_search" | "hybrid";
+      search_mode: SearchMode;
+      reason: string;
+      query?: string | null;
+      recency?: string | null;
+    } | null;
+    calls: Array<{
+      query: string | null;
+      result_count: number;
+      selected_urls: string[];
+      error: string | null;
+      response_time: number;
+      request_id?: string | null;
+    }>;
+    documents: DocumentView[];
+  };
   calibration: {
     status: string;
     display: string;

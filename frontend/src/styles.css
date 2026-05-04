@@ -245,6 +245,28 @@ button:disabled {
   margin-top: 8px;
 }
 
+.citation-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.citation-row a,
+.citation-row span {
+  background: var(--accent-soft);
+  border: 1px solid #cde8d9;
+  border-radius: 8px;
+  color: #075c37;
+  font-size: 0.78rem;
+  max-width: 280px;
+  overflow: hidden;
+  padding: 6px 8px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .typing-line {
   color: var(--muted);
   margin-bottom: 10px;
@@ -291,7 +313,8 @@ button:disabled {
 .attachment-button,
 .text-link,
 .quiet-button,
-.url-adder button {
+.url-adder button,
+.tools-menu summary {
   background: var(--surface);
   color: var(--text);
   min-height: 38px;
@@ -323,6 +346,48 @@ button:disabled {
   min-height: 38px;
   padding: 8px 10px;
   width: 100%;
+}
+
+.tools-menu {
+  position: relative;
+}
+
+.tools-menu summary {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tools-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.search-mode-options {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  display: grid;
+  gap: 2px;
+  margin-top: 6px;
+  min-width: 150px;
+  padding: 6px;
+  position: absolute;
+  z-index: 20;
+}
+
+.search-mode-options label {
+  align-items: center;
+  color: var(--text);
+  display: flex;
+  font-size: 0.88rem;
+  gap: 8px;
+  padding: 7px 8px;
+}
+
+.search-mode-options input {
+  width: auto;
 }
 
 .composer-status {
@@ -515,6 +580,10 @@ button:disabled {
   margin-top: 24px;
 }
 
+.search-panel {
+  grid-column: 1 / -1;
+}
+
 .settings-panel,
 .about-hero,
 .research-card {
@@ -561,7 +630,8 @@ label {
 }
 
 .key-list,
-.provider-readiness-list {
+.provider-readiness-list,
+.search-preference-form {
   display: grid;
   gap: 8px;
   margin-top: 14px;
@@ -763,6 +833,10 @@ th {
     align-items: stretch;
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .search-mode-options {
+    position: static;
   }
 
   .url-adder {

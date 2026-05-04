@@ -5,6 +5,8 @@ import type {
   ProviderKeyView,
   ProviderMetadata,
   ProviderPreferenceResponse,
+  SearchMode,
+  SearchPreferenceResponse,
   StreamEvent,
   TraceSpan,
 } from "./types";
@@ -76,6 +78,8 @@ interface ChatComposerProps {
   busy: boolean;
   providerReady: boolean;
   connectedProviderCount: number;
+  searchMode: SearchMode;
+  onSearchModeChange: (value: SearchMode) => void;
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
@@ -90,6 +94,8 @@ export function ChatComposer({
   busy,
   providerReady,
   connectedProviderCount,
+  searchMode,
+  onSearchModeChange,
   onChange,
   onSubmit,
   onAddFiles,
@@ -153,6 +159,23 @@ export function ChatComposer({
             Add
           </button>
         </div>
+        <details className="tools-menu">
+          <summary>Search: {searchModeLabel(searchMode)}</summary>
+          <div className="search-mode-options">
+            {(["auto", "always", "off"] as SearchMode[]).map((mode) => (
+              <label key={mode}>
+                <input
+                  checked={searchMode === mode}
+                  name="search-mode"
+                  type="radio"
+                  value={mode}
+                  onChange={() => onSearchModeChange(mode)}
+                />
+                <span>{searchModeLabel(mode)}</span>
+              </label>
+            ))}
+          </div>
+        </details>
         <div className="composer-status">
           {providerReady ? "Ready" : connectedProviderCount === 0 ? "Connect a provider in Settings" : "Choose a default provider in Settings"}
         </div>
@@ -348,6 +371,89 @@ export function ProviderSettings({
   );
 }
 
+export function SearchSettings({
+  preference,
+  keyValue,
+  setKeyValue,
+  onSaveKey,
+  onDeleteKey,
+  onSavePreference,
+}: {
+  preference: SearchPreferenceResponse | null;
+  keyValue: string;
+  setKeyValue: (value: string) => void;
+  onSaveKey: (event: FormEvent) => void;
+  onDeleteKey: () => void;
+  onSavePreference: (payload: { search_mode: SearchMode; max_results: number }) => void;
+}) {
+  const [mode, setMode] = useState<SearchMode>(preference?.preference.search_mode ?? "auto");
+  const [maxResults, setMaxResults] = useState(preference?.preference.max_results ?? 6);
+  const key = preference?.key;
+
+  useEffect(() => {
+    setMode(preference?.preference.search_mode ?? "auto");
+    setMaxResults(preference?.preference.max_results ?? 6);
+  }, [preference]);
+
+  return (
+    <section className="settings-panel search-panel">
+      <div className="section-heading">
+        <h2>Web search</h2>
+        <p>Search discovers source evidence. The selected model still writes the answer and ReliabilityGraph audits it.</p>
+      </div>
+      <form className="inline-form" onSubmit={onSaveKey}>
+        <select value="tavily" disabled aria-label="Web search provider">
+          <option value="tavily">Tavily</option>
+        </select>
+        <input
+          aria-label="Web search API key"
+          placeholder="Paste search API key"
+          type="password"
+          value={keyValue}
+          onChange={(event) => setKeyValue(event.target.value)}
+        />
+        <button type="submit">Save</button>
+      </form>
+      <div className="key-list">
+        <div className="key-row">
+          <div>
+            <strong>Search key</strong>
+            <span>{key?.key_state === "saved" || key?.key_state === "env" ? key.fingerprint ?? key.key_state : "missing"}</span>
+          </div>
+          {(key?.key_state === "saved" || key?.key_state === "env") && (
+            <button className="quiet-button" type="button" onClick={onDeleteKey} disabled={key.key_state === "env"}>
+              {key.key_state === "env" ? "Env" : "Delete"}
+            </button>
+          )}
+        </div>
+      </div>
+      <form
+        className="preference-form search-preference-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSavePreference({ search_mode: mode, max_results: maxResults });
+        }}
+      >
+        <div className="settings-number-row">
+          <label>
+            Default search
+            <select value={mode} onChange={(event) => setMode(event.target.value as SearchMode)}>
+              <option value="auto">Auto</option>
+              <option value="always">On</option>
+              <option value="off">Off</option>
+            </select>
+          </label>
+          <label>
+            Max results
+            <input min={1} max={10} type="number" value={maxResults} onChange={(event) => setMaxResults(Number(event.target.value))} />
+          </label>
+        </div>
+        <button type="submit">Save search defaults</button>
+      </form>
+    </section>
+  );
+}
+
 function formatTraceType(value: string): string {
   return value.replaceAll("_", " ");
 }
@@ -368,6 +474,19 @@ function compactEvents(events: StreamEvent[]): StreamEvent[] {
 export function formatTraceOutput(span: TraceSpan): string {
   const parsed = parseOutput(span.output_summary);
   if (!parsed) return span.output_summary;
+  if (span.type === "research_router") {
+    const route = parsed.route?.route ? String(parsed.route.route).replaceAll("_", " ") : "no search";
+    const reason = parsed.route?.reason ? ` ${parsed.route.reason}` : "";
+    return `Retrieval plan: ${route}.${reason}`;
+  }
+  if (span.type === "web_search") {
+    if (parsed.result_count !== undefined) {
+      return `Searched "${parsed.query ?? "query"}" and indexed ${parsed.indexed_sources ?? 0} source${parsed.indexed_sources === 1 ? "" : "s"}.`;
+    }
+    const call = Array.isArray(parsed.calls) ? parsed.calls[0] : null;
+    if (call?.error) return call.error;
+    return "Web search was skipped.";
+  }
   if (span.type === "candidate_generation") {
     const count = parsed.candidate_count ?? 0;
     return parsed.provider_error ? `${count} candidates generated; provider recovered from an issue.` : `${count} candidates generated.`;
@@ -379,7 +498,7 @@ export function formatTraceOutput(span: TraceSpan): string {
     return `${parsed.claim_count ?? 0} checked claim${parsed.claim_count === 1 ? "" : "s"} extracted${parsed.structured ? " with structured output" : ""}.`;
   }
   if (span.type === "evidence_retrieval") {
-    return `${parsed.evidence_count ?? 0} source match${parsed.evidence_count === 1 ? "" : "es"} from ${parsed.source_chunk_count ?? 0} attachment chunk${parsed.source_chunk_count === 1 ? "" : "s"}.`;
+    return `${parsed.evidence_count ?? 0} source match${parsed.evidence_count === 1 ? "" : "es"} from ${parsed.source_chunk_count ?? 0} source chunk${parsed.source_chunk_count === 1 ? "" : "s"}.`;
   }
   if (span.type === "claim_check") {
     return `${parsed.assessed_claims ?? 0} claim${parsed.assessed_claims === 1 ? "" : "s"} checked against available evidence.`;
@@ -399,6 +518,12 @@ export function formatTraceOutput(span: TraceSpan): string {
   }
   const entries = Object.entries(parsed).slice(0, 3);
   return entries.map(([key, value]) => `${key.replaceAll("_", " ")}: ${String(value)}`).join(" · ");
+}
+
+function searchModeLabel(mode: SearchMode): string {
+  if (mode === "always") return "On";
+  if (mode === "off") return "Off";
+  return "Auto";
 }
 
 function parseOutput(value: string): Record<string, any> | null {

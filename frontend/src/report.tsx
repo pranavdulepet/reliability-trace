@@ -135,7 +135,7 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
 function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {
   const evidence = externalEvidence(graph);
   if (evidence.length === 0) {
-    return <p className="empty-state">No attached or fetched source supports these claims yet.</p>;
+    return <p className="empty-state">No attached, fetched, or web source supports these claims yet.</p>;
   }
   return (
     <Table
@@ -290,7 +290,7 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="reliability-cards">
       <article className={`verdict-card verdict-${meta.verdict}`}>
-        <span>Can I trust this?</span>
+        <span>Final decision</span>
         <strong>{meta.verdictLabel}</strong>
         <p>{meta.score}/100 · {formatStatus(graph.answer.calibration_status)}</p>
       </article>
@@ -307,6 +307,27 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
         <span>Next action</span>
         <strong>{meta.nextAction}</strong>
       </article>
+    </div>
+  );
+}
+
+export function AnswerCitations({ graph }: { graph: ReliabilityGraph }) {
+  const citations = graph.answer.citations ?? [];
+  if (citations.length === 0) return null;
+  return (
+    <div className="citation-row" aria-label="Sources cited in this answer">
+      {citations.slice(0, 6).map((citation) => {
+        const label = citation.title || citation.url || citation.citation_id;
+        return citation.url ? (
+          <a href={citation.url} key={citation.citation_id} rel="noreferrer" target="_blank" title={citation.snippet}>
+            [{citation.citation_id}] {label}
+          </a>
+        ) : (
+          <span key={citation.citation_id} title={citation.snippet}>
+            [{citation.citation_id}] {label}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -385,7 +406,7 @@ function formatStatus(value: string): string {
 
 function sourceSummary(graph: ReliabilityGraph): string {
   const external = externalEvidence(graph);
-  if (external.length === 0) return graph.answer.source_limitations ?? "No attached or fetched source supports this answer.";
+  if (external.length === 0) return graph.answer.source_limitations ?? "No attached, fetched, or web source supports this answer.";
   const titles = Array.from(new Set(external.map((item) => item.source_title))).slice(0, 2);
   const extra = external.length > titles.length ? ` + ${external.length - titles.length} more` : "";
   return `${external.length} source match${external.length === 1 ? "" : "es"} · ${titles.join(" · ")}${extra}`;
@@ -397,7 +418,7 @@ function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {
 
 function answerMeta(graph: ReliabilityGraph) {
   const score = graph.answer.reliability_score;
-  const verdict = graph.answer.verdict ?? fallbackVerdict(score, graph);
+  const verdict = graph.answer.final_decision ?? graph.answer.verdict ?? fallbackVerdict(score, graph);
   return {
     score,
     verdict,
@@ -424,7 +445,7 @@ function verdictLabel(verdict: "rely" | "use_with_caution" | "do_not_rely"): str
 }
 
 function fallbackEvidenceStatus(graph: ReliabilityGraph): string {
-  if (externalEvidence(graph).length === 0) return "No attached or fetched source supports this answer.";
+  if (externalEvidence(graph).length === 0) return "No attached, fetched, or web source supports this answer.";
   if (graph.claim_assessments.some((item) => item.status === "contradicted" || item.relation === "contradicted")) {
     return "Sources contradict at least one checked claim.";
   }
