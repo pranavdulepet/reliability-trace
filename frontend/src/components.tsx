@@ -1,4 +1,4 @@
-import { Dispatch, FormEvent, SetStateAction, useEffect, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useRef, useState } from "react";
 import type { DraftAttachment } from "./App";
 import type {
   ConversationSummary,
@@ -104,7 +104,17 @@ export function ChatComposer({
   onOpenSettings,
 }: ChatComposerProps) {
   const [urlDraft, setUrlDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const disabled = busy || value.trim().length < 3 || !providerReady;
+  const canAddUrl = !busy && urlDraft.trim().length > 0;
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 190)}px`;
+  }, [value]);
+
   return (
     <form className="chat-composer" onSubmit={onSubmit}>
       {attachments.length > 0 && (
@@ -124,10 +134,15 @@ export function ChatComposer({
         </div>
       )}
       <textarea
+        ref={textareaRef}
+        aria-label="Message"
         value={value}
         placeholder="Ask a question..."
+        rows={1}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
+          const nativeEvent = event.nativeEvent as KeyboardEvent;
+          if (nativeEvent.isComposing) return;
           if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
             if (!disabled) event.currentTarget.form?.requestSubmit();
@@ -135,10 +150,11 @@ export function ChatComposer({
         }}
       />
       <div className="composer-actions">
-        <label className="attachment-button">
+        <label className={busy ? "attachment-button disabled-control" : "attachment-button"} aria-disabled={busy}>
           Attach files
           <input
             accept=".txt,.md,.csv,.json,.log"
+            disabled={busy}
             multiple
             type="file"
             onChange={(event) => {
@@ -148,8 +164,22 @@ export function ChatComposer({
           />
         </label>
         <div className="url-adder">
-          <input value={urlDraft} placeholder="Add URL" onChange={(event) => setUrlDraft(event.target.value)} />
+          <input
+            aria-label="Attachment URL"
+            disabled={busy}
+            value={urlDraft}
+            placeholder="Add URL"
+            onChange={(event) => setUrlDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") return;
+              event.preventDefault();
+              if (!canAddUrl) return;
+              onAddUrl(urlDraft);
+              setUrlDraft("");
+            }}
+          />
           <button
+            disabled={!canAddUrl}
             type="button"
             onClick={() => {
               onAddUrl(urlDraft);
@@ -184,7 +214,7 @@ export function ChatComposer({
             Settings
           </button>
         )}
-        <button className="send-button" disabled={disabled} type="submit">
+        <button aria-busy={busy} className="send-button" disabled={disabled} type="submit">
           {busy ? "Sending" : "Send"}
         </button>
       </div>
@@ -208,7 +238,7 @@ export function ActivityTrace({
         <span>Activity</span>
         <strong>{Math.round(progress * 100)}%</strong>
       </summary>
-      <div className="activity-progress" aria-label="Activity progress">
+      <div className="activity-progress" aria-label="Activity progress" aria-valuemax={100} aria-valuemin={0} aria-valuenow={Math.round(progress * 100)} role="progressbar">
         <span style={{ width: `${Math.round(progress * 100)}%` }} />
       </div>
       <ol>

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createConversation,
@@ -72,6 +72,7 @@ function App() {
   const [streamGraph, setStreamGraph] = useState<ReliabilityGraph | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitLockRef = useRef(false);
 
   useEffect(() => {
     void refreshWorkspace().catch(showError);
@@ -269,8 +270,9 @@ function App() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || busy || !providerReady) return;
+    if (!content || busy || !providerReady || submitLockRef.current) return;
 
+    submitLockRef.current = true;
     setBusy(true);
     setError(null);
     setEvents([]);
@@ -295,6 +297,8 @@ function App() {
     } catch (err) {
       showError(err);
       setBusy(false);
+    } finally {
+      submitLockRef.current = false;
     }
   }
 
@@ -357,6 +361,11 @@ function App() {
     setError(err instanceof Error ? err.message : "Something went wrong");
   }
 
+  function handleDraftChange(value: string) {
+    setDraft(value);
+    if (error) setError(null);
+  }
+
   return (
     <div className="chat-shell">
       <ConversationList
@@ -370,7 +379,11 @@ function App() {
       />
 
       <main className="chat-main">
-        {error && <div className="error-banner">{error}</div>}
+        {error && (
+          <div className="error-banner" role="alert">
+            {error}
+          </div>
+        )}
         {view === "settings" ? (
           <SettingsView
             providers={providers}
@@ -407,7 +420,7 @@ function App() {
             connectedProviderCount={connectedProviders.length}
             searchMode={draftSearchMode}
             setSearchMode={setDraftSearchMode}
-            setDraft={setDraft}
+            setDraft={handleDraftChange}
             onSubmit={handleSubmit}
             onAddFiles={handleAddFiles}
             onAddUrl={handleAddUrl}
@@ -461,10 +474,25 @@ function ChatView({
 }) {
   const messages = conversation?.messages ?? [];
   const hasPendingAssistant = Boolean(streamingRunId && !messages.some((message) => message.run_id === streamingRunId && message.role === "assistant"));
+  const scrollRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceFromBottom > 360 && !hasPendingAssistant) return;
+    const animation = window.requestAnimationFrame(() => {
+      element.scrollTo({
+        top: element.scrollHeight,
+        behavior: hasPendingAssistant ? "smooth" : "auto",
+      });
+    });
+    return () => window.cancelAnimationFrame(animation);
+  }, [events.length, hasPendingAssistant, messages.length, streamGraph?.answer.final_answer]);
 
   return (
     <div className="thread-layout">
-      <section className="thread-scroll" aria-label="Conversation">
+      <section ref={scrollRef} className="thread-scroll" aria-busy={busy} aria-label="Conversation">
         {messages.length === 0 && !hasPendingAssistant ? (
           <div className="empty-chat">
             <h1>Ask anything. See why the answer is trustworthy.</h1>
@@ -535,7 +563,7 @@ function GraphActivity({ graph }: { graph: ReliabilityGraph }) {
         <span>Activity</span>
         <strong>100%</strong>
       </summary>
-      <div className="activity-progress" aria-label="Activity progress">
+      <div className="activity-progress" aria-label="Activity progress" aria-valuemax={100} aria-valuemin={0} aria-valuenow={100} role="progressbar">
         <span style={{ width: "100%" }} />
       </div>
       <ol>
@@ -557,10 +585,10 @@ function GraphActivity({ graph }: { graph: ReliabilityGraph }) {
 
 function PendingAssistant({ events, graph, progress }: { events: StreamEvent[]; graph: ReliabilityGraph | null; progress: number }) {
   return (
-    <article className="message-row assistant-message">
+    <article className="message-row assistant-message" aria-live="polite">
       <div className="avatar" aria-hidden="true">RG</div>
       <div className="message-content">
-        <div className="typing-line">{graph ? "Finalizing answer..." : "Working through the answer..."}</div>
+        <div className="typing-line" role="status">{graph ? "Finalizing answer" : "Working through the answer"}</div>
         <ActivityTrace events={events} progress={progress} defaultOpen />
         {graph && (
           <>

@@ -49,11 +49,36 @@ textarea {
 
 button {
   cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    color 140ms ease,
+    opacity 140ms ease,
+    transform 110ms ease;
 }
 
 button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+button:not(:disabled):active,
+.attachment-button:not(.disabled-control):active,
+.tools-menu summary:active,
+.citation-row a:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+.attachment-button:focus-within,
+.tools-menu summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid rgba(8, 116, 67, 0.32);
+  outline-offset: 2px;
 }
 
 .chat-shell {
@@ -111,11 +136,37 @@ button:disabled {
   width: 100%;
 }
 
+.new-chat-button:not(:disabled):hover,
+.send-button:not(:disabled):hover,
+.inline-form button:not(:disabled):hover,
+.preference-form button:not(:disabled):hover,
+.primary-link:hover {
+  background: #202522;
+  border-color: #202522;
+  box-shadow: 0 10px 24px rgba(20, 22, 21, 0.12);
+}
+
+.send-button {
+  min-width: 76px;
+  position: relative;
+}
+
+.send-button[aria-busy="true"]::after {
+  animation: sendPulse 1s ease-in-out infinite;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: inherit;
+  content: "";
+  inset: 2px;
+  opacity: 0.4;
+  position: absolute;
+}
+
 .conversation-list {
   display: grid;
   gap: 5px;
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .conversation-item,
@@ -176,6 +227,8 @@ button:disabled {
   max-width: 900px;
   overflow: auto;
   padding: 52px 22px 210px;
+  scroll-behavior: smooth;
+  scrollbar-gutter: stable;
   width: 100%;
 }
 
@@ -264,12 +317,31 @@ button:disabled {
   padding: 6px 8px;
   text-decoration: none;
   text-overflow: ellipsis;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 110ms ease;
   white-space: nowrap;
+}
+
+.citation-row a:hover {
+  background: #def2e7;
+  border-color: #b8ddca;
 }
 
 .typing-line {
   color: var(--muted);
   margin-bottom: 10px;
+}
+
+.typing-line::after {
+  animation: ellipsis 1.1s steps(4, end) infinite;
+  content: "";
+  display: inline-block;
+  overflow: hidden;
+  vertical-align: bottom;
+  width: 0;
 }
 
 .chat-composer {
@@ -298,9 +370,19 @@ button:disabled {
   display: block;
   font-size: 1rem;
   line-height: 1.5;
-  min-height: 92px;
+  max-height: min(190px, 34vh);
+  min-height: 58px;
+  overflow: auto;
   padding: 16px;
   resize: none;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.chat-composer textarea:focus {
+  border-color: #9fcdb5;
+  box-shadow: 0 20px 56px rgba(20, 22, 21, 0.08), 0 0 0 3px rgba(8, 116, 67, 0.08);
 }
 
 .composer-actions {
@@ -321,10 +403,27 @@ button:disabled {
   padding: 8px 11px;
 }
 
+.attachment-button:hover,
+.text-link:hover,
+.quiet-button:hover,
+.url-adder button:not(:disabled):hover,
+.tools-menu summary:hover,
+.conversation-item:hover,
+.rail-link:hover {
+  background: var(--surface-soft);
+  border-color: var(--line-strong);
+}
+
 .attachment-button {
   cursor: pointer;
   display: inline-flex;
   position: relative;
+}
+
+.disabled-control {
+  cursor: not-allowed;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .attachment-button input {
@@ -394,6 +493,7 @@ button:disabled {
   color: var(--muted);
   font-size: 0.82rem;
   margin-left: auto;
+  min-height: 20px;
 }
 
 .attachment-row {
@@ -460,6 +560,7 @@ button:disabled {
   background: var(--accent);
   display: block;
   height: 100%;
+  transition: width 180ms ease;
 }
 
 .activity-box ol {
@@ -518,7 +619,7 @@ button:disabled {
 .reliability-cards {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   margin-top: 16px;
 }
 
@@ -541,6 +642,7 @@ button:disabled {
   font-size: 0.92rem;
   line-height: 1.35;
   margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
 .verdict-card {
@@ -784,6 +886,36 @@ th {
   z-index: 30;
 }
 
+@keyframes ellipsis {
+  0% {
+    content: "";
+    width: 0;
+  }
+  25% {
+    content: ".";
+    width: 0.35em;
+  }
+  50% {
+    content: "..";
+    width: 0.7em;
+  }
+  75%,
+  100% {
+    content: "...";
+    width: 1.05em;
+  }
+}
+
+@keyframes sendPulse {
+  0%,
+  100% {
+    opacity: 0.16;
+  }
+  50% {
+    opacity: 0.44;
+  }
+}
+
 @media (max-width: 1060px) {
   .chat-shell {
     grid-template-columns: 1fr;
@@ -853,5 +985,15 @@ th {
 
   .reliability-cards {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition: none !important;
   }
 }
