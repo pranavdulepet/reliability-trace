@@ -344,11 +344,11 @@ function App() {
         void loadConversation(conversationId);
         resolve();
       });
-      source.addEventListener("error", () => {
+      source.addEventListener("error", (event) => {
         setBusy(false);
         setStreamingRunId(null);
         source.close();
-        reject(new Error("Run stream failed"));
+        reject(new Error(streamErrorMessage(event)));
       });
     });
   }
@@ -669,6 +669,19 @@ function isProviderConnected(provider: ProviderMetadata): boolean {
 
 function makeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}`;
+}
+
+function streamErrorMessage(event: Event): string {
+  const data = "data" in event ? (event as MessageEvent).data : null;
+  if (typeof data === "string" && data.trim()) {
+    try {
+      const parsed = JSON.parse(data) as { message?: string };
+      return parsed.message || "Run stream failed";
+    } catch {
+      return data;
+    }
+  }
+  return "Run stream failed";
 }
 
 function formatTraceType(value: string): string {

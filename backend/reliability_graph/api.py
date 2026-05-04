@@ -313,7 +313,7 @@ def benchmark_report():
 
 @app.get("/api/runs/{run_id}/events")
 async def stream_run_events(run_id: str):
-    run = _get_run_or_404(run_id)
+    initial_run = _get_run_or_404(run_id)
 
     async def resolve_key(provider: str) -> Optional[str]:
         ciphertext = storage.get_provider_key_ciphertext(settings.user_id, provider)
@@ -324,25 +324,25 @@ async def stream_run_events(run_id: str):
         return os.getenv(env_var) if env_var else None
 
     async def generate():
-        if run["status"] == "completed" and run.get("graph"):
-            if run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+        if initial_run["status"] == "completed" and initial_run.get("graph"):
+            if initial_run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
                 storage.add_message(
                     settings.user_id,
-                    run["conversation_id"],
+                    initial_run["conversation_id"],
                     "assistant",
-                    run["graph"]["answer"]["final_answer"],
+                    initial_run["graph"]["answer"]["final_answer"],
                     run_id=run_id,
                 )
-            yield _sse({"type": "completed", "progress": 1.0, "message": "Run already completed", "graph": run["graph"]})
+            yield _sse({"type": "completed", "progress": 1.0, "message": "Run already completed", "graph": initial_run["graph"]})
             return
 
         storage.set_run_status(settings.user_id, run_id, "running")
-        attachment_document_ids = run.get("attachment_document_ids", [])
-        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(run, attachment_document_ids)
+        attachment_document_ids = initial_run.get("attachment_document_ids", [])
+        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(initial_run, attachment_document_ids)
         for index, span in enumerate(pre_trace, start=1):
             yield _sse({"type": "progress", "span": span, "progress": min(0.08, index * 0.04), "message": span["input_summary"]})
-        run = {
-            **run,
+        run_context = {
+            **initial_run,
             "web_search": web_search,
             "web_search_document_ids": [document_id for document_id in retrieval_document_ids if document_id not in attachment_document_ids],
             "search_used": any(call.get("result_count", 0) > 0 for call in web_search.get("calls", [])),
@@ -353,17 +353,17 @@ async def stream_run_events(run_id: str):
         )
         trace = list(pre_trace)
         try:
-            async for event in pipeline.run(run, resolve_key):
+            async for event in pipeline.run(run_context, resolve_key):
                 if event["type"] == "progress":
                     event = {**event, "progress": min(0.99, 0.10 + float(event.get("progress", 0.0)) * 0.88)}
                 if event["type"] == "completed":
                     trace = pre_trace + event["trace"]
                     event["graph"]["trace"] = trace
                     storage.complete_run(settings.user_id, run_id, event["graph"], trace)
-                    if run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+                    if run_context.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
                         storage.add_message(
                             settings.user_id,
-                            run["conversation_id"],
+                            run_context["conversation_id"],
                             "assistant",
                             event["graph"]["answer"]["final_answer"],
                             run_id=run_id,
