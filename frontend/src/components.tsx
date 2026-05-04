@@ -509,6 +509,9 @@ export function formatTraceOutput(span: TraceSpan): string {
     const reason = parsed.route?.reason ? ` ${parsed.route.reason}` : "";
     return `Retrieval plan: ${route}.${reason}`;
   }
+  if (span.type === "question_classifier") {
+    return `Question type: ${String(parsed.question_type ?? "unknown").replaceAll("_", " ")}.`;
+  }
   if (span.type === "web_search") {
     if (parsed.result_count !== undefined) {
       return `Searched "${parsed.query ?? "query"}" and indexed ${parsed.indexed_sources ?? 0} source${parsed.indexed_sources === 1 ? "" : "s"}.`;
@@ -527,6 +530,12 @@ export function formatTraceOutput(span: TraceSpan): string {
   if (span.type === "claim_extraction") {
     return `${parsed.claim_count ?? 0} checked claim${parsed.claim_count === 1 ? "" : "s"} extracted${parsed.structured ? " with structured output" : ""}.`;
   }
+  if (span.type === "assumption_extraction") {
+    return `${parsed.assumption_count ?? 0} assumption${parsed.assumption_count === 1 ? "" : "s"} extracted.`;
+  }
+  if (span.type === "decision_analysis") {
+    return `${parsed.alternative_count ?? 0} alternative${parsed.alternative_count === 1 ? "" : "s"} compared.`;
+  }
   if (span.type === "evidence_retrieval") {
     return `${parsed.evidence_count ?? 0} source match${parsed.evidence_count === 1 ? "" : "es"} from ${parsed.source_chunk_count ?? 0} source chunk${parsed.source_chunk_count === 1 ? "" : "s"}.`;
   }
@@ -535,6 +544,9 @@ export function formatTraceOutput(span: TraceSpan): string {
   }
   if (span.type === "stress_test") {
     return `Unsupported flip rate ${formatMetric(parsed.unsupported_flip_rate)}.`;
+  }
+  if (span.type === "rubric_judge") {
+    return `Factuality judge score ${formatMetric(parsed.factuality_score)}.`;
   }
   if (span.type === "reliability_scoring") {
     const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";

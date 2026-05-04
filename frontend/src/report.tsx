@@ -1,4 +1,5 @@
 import { exportUrl } from "./api";
+import type { SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph } from "./types";
 
 export const TABS = [
@@ -345,13 +346,21 @@ export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="answer-details">
       {sections.map((section) => (
-        <details key={section.title} open={section.defaultOpen}>
+        <details key={section.title} onToggle={handleDetailToggle} open={section.defaultOpen}>
           <summary>{section.title}</summary>
           <div className="detail-panel">{renderTab(section.title, graph)}</div>
         </details>
       ))}
     </div>
   );
+}
+
+function handleDetailToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+  const details = event.currentTarget;
+  if (!details.open) return;
+  window.requestAnimationFrame(() => {
+    details.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
 }
 
 function ExportTab({ graph }: { graph: ReliabilityGraph }) {

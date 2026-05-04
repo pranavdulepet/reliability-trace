@@ -1,4 +1,5 @@
 :root {
+  --rail-width: 280px;
   --bg: #fbfbfa;
   --surface: #ffffff;
   --surface-soft: #f5f6f4;
@@ -83,7 +84,7 @@ a:focus-visible {
 
 .chat-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
   min-height: 100vh;
 }
 
@@ -176,7 +177,7 @@ a:focus-visible {
   color: var(--text-soft);
   display: grid;
   gap: 2px;
-  min-height: 40px;
+  min-height: 46px;
   padding: 9px 10px;
   text-align: left;
 }
@@ -187,7 +188,14 @@ a:focus-visible {
   border-color: var(--line);
 }
 
-.conversation-item span,
+.conversation-item span {
+  -webkit-box-orient: vertical;
+  display: -webkit-box;
+  line-height: 1.2;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
 .conversation-item small {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -226,8 +234,9 @@ a:focus-visible {
   margin: 0 auto;
   max-width: 900px;
   overflow: auto;
-  padding: 52px 22px 210px;
+  padding: 52px 22px 280px;
   scroll-behavior: smooth;
+  scroll-padding-bottom: 260px;
   scrollbar-gutter: stable;
   width: 100%;
 }
@@ -347,7 +356,7 @@ a:focus-visible {
 .chat-composer {
   background: linear-gradient(180deg, rgba(251, 251, 250, 0), var(--bg) 24%);
   bottom: 0;
-  left: 260px;
+  left: var(--rail-width);
   padding: 36px 22px 20px;
   position: fixed;
   right: 0;
@@ -466,13 +475,15 @@ a:focus-visible {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
+  bottom: calc(100% + 6px);
   box-shadow: var(--shadow);
   display: grid;
   gap: 2px;
-  margin-top: 6px;
+  margin-top: 0;
   min-width: 150px;
   padding: 6px;
   position: absolute;
+  right: 0;
   z-index: 20;
 }
 
@@ -676,10 +687,15 @@ a:focus-visible {
 }
 
 .settings-columns {
+  align-items: start;
   display: grid;
   gap: 14px;
   grid-template-columns: minmax(360px, 0.9fr) minmax(360px, 1fr);
   margin-top: 24px;
+}
+
+.about-hero h1 {
+  font-size: clamp(2rem, 3.2vw, 3.2rem);
 }
 
 .search-panel {
@@ -842,7 +858,7 @@ label {
 
 table {
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 1040px;
   width: 100%;
 }
 
@@ -850,9 +866,20 @@ th,
 td {
   border-bottom: 1px solid var(--line);
   font-size: 0.84rem;
+  line-height: 1.35;
   padding: 9px;
   text-align: left;
   vertical-align: top;
+}
+
+th:first-child,
+td:first-child {
+  min-width: 260px;
+}
+
+th:nth-last-child(-n + 2),
+td:nth-last-child(-n + 2) {
+  min-width: 220px;
 }
 
 th {
@@ -878,7 +905,7 @@ th {
   border: 1px solid #f0b8af;
   border-radius: 8px;
   color: var(--red);
-  left: calc(260px + 22px);
+  left: calc(var(--rail-width) + 22px);
   padding: 10px 12px;
   position: fixed;
   right: 22px;
@@ -968,7 +995,9 @@ th {
   }
 
   .search-mode-options {
+    bottom: auto;
     position: static;
+    right: auto;
   }
 
   .url-adder {
