@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -9,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .benchmarks import build_benchmark_report
-from .config import ENV_KEY_BY_PROVIDER, settings
+from .config import ENV_KEY_BY_PROVIDER, ENV_KEY_BY_SEARCH_PROVIDER, settings
 from .pipeline import ReliabilityPipeline
 from .providers import list_provider_metadata
 from .retrieval import build_chunks, fetch_url_text, search_chunks
@@ -21,10 +22,13 @@ from .schemas import (
     ProviderPreferenceUpdate,
     RunCreate,
     RunLabelCreate,
+    SearchKeyCreate,
+    SearchPreferenceUpdate,
     SourceFetchCreate,
 )
 from .secrets import KeyVault
 from .storage import Storage
+from .web_search import choose_research_route, route_to_dict, search_tavily
 
 app = FastAPI(title="ReliabilityGraph", version="0.1.0")
 app.add_middleware(
@@ -81,6 +85,38 @@ def save_provider_preferences(payload: ProviderPreferenceUpdate):
         payload.max_cost_usd,
     )
     return {"preference": preference, "resolved": _resolve_provider_defaults(None, strict=False)}
+
+
+@app.get("/api/search-preferences")
+def get_search_preferences():
+    return {
+        "preference": storage.get_search_preference(settings.user_id),
+        "key": _search_key_view(),
+    }
+
+
+@app.put("/api/search-preferences")
+def save_search_preferences(payload: SearchPreferenceUpdate):
+    return {
+        "preference": storage.save_search_preference(settings.user_id, payload.search_mode, payload.max_results),
+        "key": _search_key_view(),
+    }
+
+
+@app.post("/api/search-key", status_code=201)
+def save_search_key(payload: SearchKeyCreate):
+    ciphertext = vault.encrypt(payload.api_key)
+    fingerprint = vault.fingerprint(payload.api_key)
+    storage.save_search_key(settings.user_id, "tavily", ciphertext, fingerprint)
+    return _search_key_view()
+
+
+@app.delete("/api/search-key")
+def delete_search_key():
+    deleted = storage.delete_search_key(settings.user_id, "tavily")
+    if not deleted:
+        raise HTTPException(status_code=404, detail="search key not found")
+    return {"deleted": True}
 
 
 @app.get("/api/keys")
@@ -170,6 +206,7 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
             user_message_id=user_message["message_id"],
             prior_context=prior_context,
             attachment_document_ids=attachment_document_ids,
+            search_mode=payload.search_mode or storage.get_search_preference(settings.user_id)["search_mode"],
         )
     )
     run = storage.create_run(settings.user_id, run_payload)
@@ -301,15 +338,27 @@ async def stream_run_events(run_id: str):
 
         storage.set_run_status(settings.user_id, run_id, "running")
         attachment_document_ids = run.get("attachment_document_ids", [])
+        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(run, attachment_document_ids)
+        for index, span in enumerate(pre_trace, start=1):
+            yield _sse({"type": "progress", "span": span, "progress": min(0.08, index * 0.04), "message": span["input_summary"]})
+        run = {
+            **run,
+            "web_search": web_search,
+            "web_search_document_ids": [document_id for document_id in retrieval_document_ids if document_id not in attachment_document_ids],
+            "search_used": any(call.get("result_count", 0) > 0 for call in web_search.get("calls", [])),
+        }
         pipeline = ReliabilityPipeline(
-            retrieval_chunks=storage.list_document_chunks(settings.user_id, attachment_document_ids),
+            retrieval_chunks=storage.list_document_chunks(settings.user_id, retrieval_document_ids),
             calibration_report=build_benchmark_report(storage.list_labeled_runs(settings.user_id)),
         )
-        trace = []
+        trace = list(pre_trace)
         try:
             async for event in pipeline.run(run, resolve_key):
+                if event["type"] == "progress":
+                    event = {**event, "progress": min(0.99, 0.10 + float(event.get("progress", 0.0)) * 0.88)}
                 if event["type"] == "completed":
-                    trace = event["trace"]
+                    trace = pre_trace + event["trace"]
+                    event["graph"]["trace"] = trace
                     storage.complete_run(settings.user_id, run_id, event["graph"], trace)
                     if run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
                         storage.add_message(
@@ -328,6 +377,123 @@ async def stream_run_events(run_id: str):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+async def _prepare_retrieval_for_run(run: dict, attachment_document_ids: list[str]):
+    preference = storage.get_search_preference(settings.user_id)
+    route = choose_research_route(
+        run["question"],
+        attachment_document_ids,
+        run.get("search_mode") or preference["search_mode"],
+    )
+    route_dict = route_to_dict(route)
+    web_search = {"route": route_dict, "calls": [], "documents": []}
+    pre_trace = [
+        _span(
+            run["run_id"],
+            "research_router",
+            "completed",
+            "Decided retrieval plan: %s" % route.route.replace("_", " "),
+            {"route": route_dict},
+        )
+    ]
+    retrieval_document_ids = list(attachment_document_ids)
+
+    if route.route not in {"web_search", "hybrid"}:
+        return pre_trace, retrieval_document_ids, web_search
+
+    api_key = _resolve_search_key()
+    if not api_key:
+        call = {
+            "query": route.query,
+            "result_count": 0,
+            "selected_urls": [],
+            "error": "No web search key is configured in Settings.",
+            "response_time": 0,
+        }
+        web_search["calls"].append(call)
+        pre_trace.append(
+            _span(
+                run["run_id"],
+                "web_search",
+                "completed",
+                "Skipped web search because no web search key is configured.",
+                {"calls": web_search["calls"]},
+            )
+        )
+        return pre_trace, retrieval_document_ids, web_search
+
+    try:
+        result = await asyncio.to_thread(search_tavily, api_key, route.query or run["question"], preference["max_results"], route.recency)
+        documents = _index_web_search_results(result["results"])
+        retrieval_document_ids.extend([document["document_id"] for document in documents])
+        call = {
+            "query": result["query"],
+            "result_count": len(result["results"]),
+            "selected_urls": [item["url"] for item in result["results"][: preference["max_results"]]],
+            "error": None,
+            "response_time": result["response_time"],
+            "request_id": result.get("request_id"),
+        }
+        web_search["calls"].append(call)
+        web_search["documents"] = documents
+        pre_trace.append(
+            _span(
+                run["run_id"],
+                "web_search",
+                "completed",
+                "Searched the web for source evidence.",
+                {
+                    "query": call["query"],
+                    "result_count": call["result_count"],
+                    "indexed_sources": len(documents),
+                },
+            )
+        )
+    except Exception as exc:
+        call = {
+            "query": route.query,
+            "result_count": 0,
+            "selected_urls": [],
+            "error": _sanitize_error(str(exc)),
+            "response_time": 0,
+        }
+        web_search["calls"].append(call)
+        pre_trace.append(
+            _span(
+                run["run_id"],
+                "web_search",
+                "completed",
+                "Web search failed cleanly.",
+                {"calls": web_search["calls"]},
+            )
+        )
+    return pre_trace, retrieval_document_ids, web_search
+
+
+def _index_web_search_results(results: list[dict]) -> list[dict]:
+    documents = []
+    for result in results:
+        content = result["content"]
+        content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        existing = storage.find_document_by_signature(settings.user_id, content_sha, result["url"])
+        if existing:
+            documents.append(existing)
+            continue
+        chunks = build_chunks(content)
+        if not chunks:
+            continue
+        documents.append(
+            storage.save_document(
+                settings.user_id,
+                result["title"],
+                content,
+                result["url"],
+                "web_search_result",
+                chunks,
+            )
+        )
+    return documents
+
+
 def _get_run_or_404(run_id: str):
     try:
         return storage.get_run(settings.user_id, run_id)
@@ -339,6 +505,40 @@ def _connected_providers():
     saved = [row["provider"] for row in storage.list_provider_keys(settings.user_id)]
     env_keys = [provider for provider, env_var in ENV_KEY_BY_PROVIDER.items() if os.getenv(env_var)]
     return sorted(set(saved + env_keys))
+
+
+def _search_key_view():
+    try:
+        saved = storage.get_search_key_view(settings.user_id, "tavily")
+        return {**saved, "key_state": "saved", "key_env_var": ENV_KEY_BY_SEARCH_PROVIDER["tavily"]}
+    except KeyError:
+        if os.getenv(ENV_KEY_BY_SEARCH_PROVIDER["tavily"]):
+            return {
+                "provider": "tavily",
+                "fingerprint": "env",
+                "status": "active",
+                "created_at": None,
+                "last_used_at": None,
+                "key_state": "env",
+                "key_env_var": ENV_KEY_BY_SEARCH_PROVIDER["tavily"],
+            }
+        return {
+            "provider": "tavily",
+            "fingerprint": None,
+            "status": "missing",
+            "created_at": None,
+            "last_used_at": None,
+            "key_state": "missing",
+            "key_env_var": ENV_KEY_BY_SEARCH_PROVIDER["tavily"],
+        }
+
+
+def _resolve_search_key() -> Optional[str]:
+    ciphertext = storage.get_search_key_ciphertext(settings.user_id, "tavily")
+    if ciphertext:
+        storage.mark_search_key_used(settings.user_id, "tavily")
+        return vault.decrypt(ciphertext)
+    return os.getenv(ENV_KEY_BY_SEARCH_PROVIDER["tavily"])
 
 
 def _resolve_provider_defaults(provider: Optional[str], strict: bool = True):
@@ -405,9 +605,24 @@ def _sse(event):
     return "event: %s\ndata: %s\n\n" % (event.get("type", "message"), json.dumps(event))
 
 
+def _span(run_id: str, span_type: str, status: str, message: str, output: dict):
+    return {
+        "span_id": "span_pre_%s" % span_type,
+        "run_id": run_id,
+        "type": span_type,
+        "status": status,
+        "input_summary": message,
+        "output_summary": json.dumps(output, sort_keys=True),
+        "tool": span_type,
+        "cost_usd": 0.0,
+        "risk_flags": [],
+    }
+
+
 SECRET_PATTERNS = [
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"tml-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"tvly-[A-Za-z0-9_-]{12,}"),
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
 ]

@@ -42,5 +42,9 @@ ENV_KEY_BY_PROVIDER: Dict[str, str] = {
     "tinker": "TINKER_API_KEY",
 }
 
+ENV_KEY_BY_SEARCH_PROVIDER: Dict[str, str] = {
+    "tavily": "TAVILY_API_KEY",
+}
+
 
 settings = Settings.from_env()

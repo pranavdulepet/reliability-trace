@@ -34,6 +34,7 @@ MAX_EXAMPLE_ANSWER_CHARS = 5_000
 SECRET_PATTERNS = [
     re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"tml-[A-Za-z0-9_-]{12,}"),
+    re.compile(r"tvly-[A-Za-z0-9_-]{12,}"),
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
 ]

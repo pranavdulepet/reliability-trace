@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 
 KEY_PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "tinker"]
 RUN_PROVIDERS = ["preview", "local"] + KEY_PROVIDERS
+SEARCH_MODES = ["auto", "always", "off"]
 
 
 class ProviderKeyCreate(BaseModel):
@@ -39,6 +40,7 @@ class RunCreate(BaseModel):
     user_message_id: Optional[str] = Field(default=None, max_length=80)
     prior_context: List[Dict[str, str]] = Field(default_factory=list)
     attachment_document_ids: List[str] = Field(default_factory=list)
+    search_mode: str = Field(default="auto")
 
     @field_validator("provider")
     @classmethod
@@ -59,6 +61,14 @@ class RunCreate(BaseModel):
             if document_id and document_id not in cleaned:
                 cleaned.append(document_id)
         return cleaned[:20]
+
+    @field_validator("search_mode")
+    @classmethod
+    def validate_search_mode(cls, value: str) -> str:
+        mode = value.lower().strip()
+        if mode not in SEARCH_MODES:
+            raise ValueError("unsupported search mode")
+        return mode
 
 
 class RunView(BaseModel):
@@ -87,6 +97,7 @@ class ConversationMessageCreate(BaseModel):
     samples: Optional[int] = Field(default=None, ge=1, le=5)
     max_cost_usd: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     attachment_document_ids: List[str] = Field(default_factory=list)
+    search_mode: Optional[str] = None
 
     @field_validator("provider")
     @classmethod
@@ -108,6 +119,16 @@ class ConversationMessageCreate(BaseModel):
                 cleaned.append(document_id)
         return cleaned[:20]
 
+    @field_validator("search_mode")
+    @classmethod
+    def validate_search_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or value.strip() == "":
+            return None
+        mode = value.lower().strip()
+        if mode not in SEARCH_MODES:
+            raise ValueError("unsupported search mode")
+        return mode
+
 
 class ProviderPreferenceUpdate(BaseModel):
     provider: Optional[str] = None
@@ -124,6 +145,23 @@ class ProviderPreferenceUpdate(BaseModel):
         if provider not in KEY_PROVIDERS:
             raise ValueError("unsupported provider")
         return provider
+
+
+class SearchKeyCreate(BaseModel):
+    api_key: str = Field(min_length=4, max_length=5000)
+
+
+class SearchPreferenceUpdate(BaseModel):
+    search_mode: str = Field(default="auto")
+    max_results: int = Field(default=6, ge=1, le=10)
+
+    @field_validator("search_mode")
+    @classmethod
+    def validate_search_mode(cls, value: str) -> str:
+        mode = value.lower().strip()
+        if mode not in SEARCH_MODES:
+            raise ValueError("unsupported search mode")
+        return mode
 
 
 class RunLabelCreate(BaseModel):

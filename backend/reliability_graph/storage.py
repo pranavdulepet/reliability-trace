@@ -47,6 +47,7 @@ class Storage:
                   status text not null,
                   created_at text not null,
                   completed_at text,
+                  search_mode text,
                   prior_context_json text,
                   attachment_document_ids_json text,
                   graph_json text,
@@ -79,6 +80,24 @@ class Storage:
                   model text,
                   samples integer not null,
                   max_cost_usd real not null,
+                  updated_at text not null
+                );
+
+                create table if not exists search_keys (
+                  user_id text not null,
+                  provider text not null,
+                  ciphertext text not null,
+                  fingerprint text not null,
+                  status text not null,
+                  created_at text not null,
+                  last_used_at text,
+                  primary key (user_id, provider)
+                );
+
+                create table if not exists search_preferences (
+                  user_id text primary key,
+                  search_mode text not null,
+                  max_results integer not null,
                   updated_at text not null
                 );
 
@@ -125,6 +144,7 @@ class Storage:
             )
             self._ensure_column(con, "runs", "conversation_id", "text")
             self._ensure_column(con, "runs", "user_message_id", "text")
+            self._ensure_column(con, "runs", "search_mode", "text")
             self._ensure_column(con, "runs", "prior_context_json", "text")
             self._ensure_column(con, "runs", "attachment_document_ids_json", "text")
 
@@ -215,6 +235,111 @@ class Storage:
                 (user_id, provider),
             )
         return cursor.rowcount > 0
+
+    def save_search_key(
+        self,
+        user_id: str,
+        provider: str,
+        ciphertext: str,
+        fingerprint: str,
+    ) -> Dict[str, Any]:
+        now = utcnow()
+        with self._connect() as con:
+            con.execute(
+                """
+                insert into search_keys
+                  (user_id, provider, ciphertext, fingerprint, status, created_at, last_used_at)
+                values (?, ?, ?, ?, 'active', ?, null)
+                on conflict(user_id, provider) do update set
+                  ciphertext=excluded.ciphertext,
+                  fingerprint=excluded.fingerprint,
+                  status='active',
+                  created_at=excluded.created_at,
+                  last_used_at=null
+                """,
+                (user_id, provider, ciphertext, fingerprint, now),
+            )
+        return self.get_search_key_view(user_id, provider)
+
+    def get_search_key_view(self, user_id: str, provider: str) -> Dict[str, Any]:
+        with self._connect() as con:
+            row = con.execute(
+                """
+                select provider, fingerprint, status, created_at, last_used_at
+                from search_keys
+                where user_id = ? and provider = ?
+                """,
+                (user_id, provider),
+            ).fetchone()
+        if row is None:
+            raise KeyError("search key not found")
+        return dict(row)
+
+    def get_search_key_ciphertext(self, user_id: str, provider: str) -> Optional[str]:
+        with self._connect() as con:
+            row = con.execute(
+                """
+                select ciphertext
+                from search_keys
+                where user_id = ? and provider = ? and status = 'active'
+                """,
+                (user_id, provider),
+            ).fetchone()
+        return None if row is None else str(row["ciphertext"])
+
+    def mark_search_key_used(self, user_id: str, provider: str) -> None:
+        with self._connect() as con:
+            con.execute(
+                """
+                update search_keys
+                set last_used_at = ?
+                where user_id = ? and provider = ?
+                """,
+                (utcnow(), user_id, provider),
+            )
+
+    def delete_search_key(self, user_id: str, provider: str) -> bool:
+        with self._connect() as con:
+            cursor = con.execute(
+                "delete from search_keys where user_id = ? and provider = ?",
+                (user_id, provider),
+            )
+        return cursor.rowcount > 0
+
+    def get_search_preference(self, user_id: str) -> Dict[str, Any]:
+        with self._connect() as con:
+            row = con.execute(
+                """
+                select search_mode, max_results, updated_at
+                from search_preferences
+                where user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "search_mode": "auto",
+                "max_results": 6,
+                "updated_at": None,
+            }
+        return dict(row)
+
+    def save_search_preference(self, user_id: str, search_mode: str, max_results: int) -> Dict[str, Any]:
+        now = utcnow()
+        with self._connect() as con:
+            con.execute(
+                """
+                insert into search_preferences
+                  (user_id, search_mode, max_results, updated_at)
+                values (?, ?, ?, ?)
+                on conflict(user_id) do update set
+                  search_mode=excluded.search_mode,
+                  max_results=excluded.max_results,
+                  updated_at=excluded.updated_at
+                """,
+                (user_id, search_mode, max_results, now),
+            )
+        return self.get_search_preference(user_id)
 
     def get_provider_preference(self, user_id: str) -> Dict[str, Any]:
         with self._connect() as con:
@@ -402,9 +527,9 @@ class Storage:
                 """
                 insert into runs
                   (run_id, user_id, conversation_id, user_message_id, question, provider, model, samples,
-                   max_cost_usd, use_live_provider, status, created_at, prior_context_json,
+                   max_cost_usd, use_live_provider, status, created_at, search_mode, prior_context_json,
                    attachment_document_ids_json)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -418,6 +543,7 @@ class Storage:
                     request.max_cost_usd,
                     1 if request.use_live_provider else 0,
                     now,
+                    request.search_mode,
                     json.dumps(request.prior_context),
                     json.dumps(request.attachment_document_ids),
                 ),
@@ -429,7 +555,7 @@ class Storage:
             rows = con.execute(
                 """
                 select run_id, conversation_id, user_message_id, question, provider, model, samples,
-                       max_cost_usd, use_live_provider, status, created_at, completed_at,
+                       max_cost_usd, use_live_provider, status, created_at, completed_at, search_mode,
                        attachment_document_ids_json, error
                 from runs
                 where user_id = ?
@@ -676,6 +802,7 @@ class Storage:
     def _run_row_to_dict(self, row: sqlite3.Row, include_graph: bool = True) -> Dict[str, Any]:
         data = dict(row)
         data["use_live_provider"] = bool(data.get("use_live_provider"))
+        data["search_mode"] = data.get("search_mode") or "auto"
         data["prior_context"] = json.loads(data["prior_context_json"]) if data.get("prior_context_json") else []
         data["attachment_document_ids"] = (
             json.loads(data["attachment_document_ids_json"]) if data.get("attachment_document_ids_json") else []

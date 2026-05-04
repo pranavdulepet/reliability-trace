@@ -50,6 +50,10 @@ def test_pipeline_builds_complete_decision_graph():
     assert final["type"] == "completed"
     assert graph["run"]["question_type"] == "decision_qa"
     assert graph["answer"]["calibration_status"] == "uncalibrated_diagnostic"
+    assert graph["answer"]["final_decision"] == graph["answer"]["verdict"]
+    assert graph["run"]["search_mode"] == "auto"
+    assert graph["run"]["search_used"] is False
+    assert graph["web_search"]["calls"] == []
     assert graph["decision_analysis"]["applicable"] is True
     assert graph["export"]["contains_plaintext_provider_keys"] is False
     assert len(graph["trace"]) == len(ReliabilityPipeline.steps)
@@ -92,8 +96,8 @@ def test_pipeline_uses_document_evidence_for_claim_matching():
             "chunk_id": "chunk_1",
             "document_id": "doc_1",
             "title": "Answer Reliability Guide",
-            "source_url": None,
-            "source_type": "uploaded_document",
+            "source_url": "https://example.com/reliability-guide",
+            "source_type": "web_search_result",
         }
         for chunk in build_chunks(
             "The best provisional answer is to proceed only if the decision can be decomposed into claims, assumptions, risks, and reversible next steps. "
@@ -102,9 +106,12 @@ def test_pipeline_uses_document_evidence_for_claim_matching():
     ]
     graph = run_pipeline(base_run(), retrieval_chunks=chunks)[-1]["graph"]
 
-    assert any(item["source_type"] == "uploaded_document" for item in graph["evidence"])
+    assert any(item["source_type"] == "web_search_result" for item in graph["evidence"])
     assert any(assessment["status"] in {"supported", "partially_supported"} for assessment in graph["claim_assessments"])
     assert graph["features"]["retrieval_peak_score"] >= graph["features"]["retrieval_alignment_score"]
+    assert graph["answer"]["final_decision"] == graph["answer"]["verdict"]
+    assert graph["answer"]["citations"]
+    assert graph["answer"]["citations"][0]["url"] == "https://example.com/reliability-guide"
 
 
 def test_no_source_factual_question_is_capped_without_system_trace_source():
@@ -113,7 +120,7 @@ def test_no_source_factual_question_is_capped_without_system_trace_source():
     )[-1]["graph"]
 
     assert graph["evidence"] == []
-    assert graph["answer"]["evidence_status"] == "No attached or fetched source supports this answer."
+    assert graph["answer"]["evidence_status"] == "No attached, fetched, or web source supports this answer."
     assert graph["answer"]["verdict"] in {"use_with_caution", "do_not_rely"}
     assert graph["answer"]["reliability_score"] <= 65
     assert "system_trace" not in json.dumps(graph["evidence"])
@@ -158,7 +165,7 @@ def test_attached_source_contradiction_changes_claim_relation_and_score(monkeypa
     graph = asyncio.run(execute())[-1]["graph"]
 
     assert any(assessment["relation"] == "contradicted" for assessment in graph["claim_assessments"])
-    assert graph["answer"]["evidence_status"] == "Attached or fetched sources contradict at least one checked claim."
+    assert graph["answer"]["evidence_status"] == "Available sources contradict at least one checked claim."
     assert graph["answer"]["reliability_score"] <= 60
 
 

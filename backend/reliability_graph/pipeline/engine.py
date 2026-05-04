@@ -1123,7 +1123,7 @@ class ReliabilityPipeline:
 
     def _assessment_explanation(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
         if not evidence_items:
-            return "No attached document or fetched source chunk matched this claim strongly enough."
+            return "No attached file, fetched URL, or web source chunk matched this claim strongly enough."
         if status == "contradicted":
             return "At least one matched source chunk uses contradictory language for this claim."
         if status == "supported":
@@ -1132,7 +1132,7 @@ class ReliabilityPipeline:
 
     def _source_limit_for_assessment(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
         if not evidence_items:
-            return "No attached or fetched source supports this claim."
+            return "No attached, fetched, or web source supports this claim."
         if status == "contradicted":
             return "Matched evidence conflicts with the claim; compare the source snippet before relying on it."
         if status == "partially_supported":
@@ -1164,6 +1164,7 @@ class ReliabilityPipeline:
     def _safe_error_text(self, message: str) -> str:
         cleaned = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", message, flags=re.IGNORECASE)
         cleaned = re.sub(r"tml-[A-Za-z0-9_-]{12,}", "[redacted]", cleaned)
+        cleaned = re.sub(r"tvly-[A-Za-z0-9_-]{12,}", "[redacted]", cleaned)
         cleaned = re.sub(r"sk-[A-Za-z0-9_-]{12,}", "[redacted]", cleaned)
         cleaned = re.sub(r"AIza[A-Za-z0-9_-]{20,}", "[redacted]", cleaned)
         return cleaned[:500]
@@ -1223,7 +1224,7 @@ class ReliabilityPipeline:
         score = state["score"]
 
         if contradicted:
-            evidence_status = "Attached or fetched sources contradict at least one checked claim."
+            evidence_status = "Available sources contradict at least one checked claim."
         elif external_evidence and not_found:
             evidence_status = "Sources support some claims, but at least one checked claim was not found."
         elif external_evidence and partially_supported:
@@ -1231,9 +1232,9 @@ class ReliabilityPipeline:
         elif external_evidence and supported:
             evidence_status = "Attached or fetched sources support the main checked claims."
         elif self.retrieval_chunks:
-            evidence_status = "Attached sources were available, but none matched the answer's claims strongly enough."
+            evidence_status = "Sources were available, but none matched the answer's claims strongly enough."
         else:
-            evidence_status = "No attached or fetched source supports this answer."
+            evidence_status = "No attached, fetched, or web source supports this answer."
 
         if high_contradicted or (contradicted and score < 65) or perturbation_flip or (no_source_factual and score < 55):
             verdict = "do_not_rely"
@@ -1324,7 +1325,7 @@ class ReliabilityPipeline:
         if perturbation_flip:
             return "A robustness prompt changed the answer without adding evidence."
         if no_source_factual:
-            return "The factual or current parts are not grounded in attached or fetched sources."
+            return "The factual or current parts are not grounded in attached, fetched, or web sources."
         if high_unsupported:
             claim = claims_by_id.get(high_unsupported[0]["claim_id"], {})
             return "A high-impact claim lacks direct source support: %s" % claim.get("text", "a checked claim")
@@ -1369,6 +1370,12 @@ class ReliabilityPipeline:
         if contradicted:
             return "Open the contradicted claim and source snippet before relying on the answer."
         if no_source_factual:
+            route = (state["run"].get("web_search") or {}).get("route") or {}
+            calls = (state["run"].get("web_search") or {}).get("calls") or []
+            if state["run"].get("search_mode") == "off":
+                return "Turn search on or attach a reliable source before relying on the factual answer."
+            if route.get("route") in {"web_search", "hybrid"} and any(call.get("error") for call in calls):
+                return "Add a web search key in Settings or attach a reliable source before relying on the factual answer."
             return "Attach a reliable source or URL and rerun before relying on the factual answer."
         if not self._has_external_evidence(state["evidence"]):
             return "Attach source material if the answer needs factual grounding."
@@ -1382,14 +1389,39 @@ class ReliabilityPipeline:
         contradicted: List[Dict[str, Any]],
     ) -> str:
         if not external_evidence and not self.retrieval_chunks:
-            return "No file or URL source was available for retrieval."
+            return "No file, URL, or web source was available for retrieval."
         if not external_evidence:
             return "Attached source text was indexed, but retrieval found no strong claim-level match."
         if contradicted:
             return "At least one source match contradicts the answer, so source support is mixed."
         if not_found:
             return "Source support covers only part of the answer; unsupported claims remain listed in details."
-        return "Source support is limited to the attached or fetched documents used for this message."
+        return "Source support is limited to the files, URLs, and web results used for this message."
+
+    def _citations(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        citations: List[Dict[str, Any]] = []
+        seen = set()
+        for item in state.get("evidence", []):
+            if item.get("source_type") in {"system_trace", "internal_policy"}:
+                continue
+            key = item.get("source_url") or item.get("source_title") or item.get("evidence_id")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            citations.append(
+                {
+                    "citation_id": "s%d" % (len(citations) + 1),
+                    "evidence_id": item.get("evidence_id"),
+                    "claim_id": item.get("claim_id"),
+                    "title": item.get("source_title") or "Untitled source",
+                    "url": item.get("source_url"),
+                    "source_type": item.get("source_type") or "uploaded_document",
+                    "snippet": item.get("snippet", "")[:500],
+                }
+            )
+            if len(citations) >= 6:
+                break
+        return citations
 
     def _analysis_basis(self, state: Dict[str, Any]) -> List[Dict[str, str]]:
         basis = [
@@ -1433,6 +1465,15 @@ class ReliabilityPipeline:
                     "limitation": "Prompt pressure checks are adversarial probes, not exhaustive verification.",
                 }
             )
+        if state.get("run", {}).get("web_search"):
+            basis.append(
+                {
+                    "signal": "Web evidence",
+                    "method": "search_grounded_retrieval",
+                    "research_lineage": "Search-augmented factuality checking and grounded generation",
+                    "limitation": "Search can miss better sources, return stale pages, or retrieve snippets that need source-level review.",
+                }
+            )
         return basis
 
     def _apply_runtime_score_caps(self, state: Dict[str, Any]) -> None:
@@ -1460,6 +1501,7 @@ class ReliabilityPipeline:
                 "run_id": run["run_id"],
                 "conversation_id": run.get("conversation_id"),
                 "attachment_document_ids": run.get("attachment_document_ids", []),
+                "web_search_document_ids": run.get("web_search_document_ids", []),
                 "question": run["question"],
                 "question_type": state["question_type"],
                 "provider": run["provider"],
@@ -1467,10 +1509,14 @@ class ReliabilityPipeline:
                 "samples": run["samples"],
                 "max_cost_usd": run["max_cost_usd"],
                 "use_live_provider": run["use_live_provider"],
+                "search_mode": run.get("search_mode", "auto"),
+                "search_used": bool(run.get("search_used")),
             },
             "answer": {
                 **state["answer"],
                 **reliability["answer"],
+                "citations": self._citations(state),
+                "final_decision": reliability["answer"]["verdict"],
                 "reliability_score": state["score"],
                 "calibration_status": state["calibration"]["status"],
                 "top_positive_signals": reliability["top_positive_signals"],
@@ -1491,6 +1537,7 @@ class ReliabilityPipeline:
             },
             "stress_tests": state["stress_tests"],
             "trace": self.trace,
+            "web_search": run.get("web_search", {"route": None, "calls": [], "documents": []}),
             "calibration": state["calibration"],
             "perturbation_probe": state["perturbation_probe"],
             "causal_probe": state["perturbation_probe"],

@@ -116,6 +116,37 @@ def test_storage_provider_preferences_are_user_scoped(tmp_path):
     assert storage.get_provider_preference("user_b")["provider"] is None
 
 
+def test_storage_search_preferences_and_key_views_are_user_scoped(tmp_path):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+
+    storage.save_search_preference("user_a", "always", 4)
+    storage.save_search_key("user_a", "tavily", "ciphertext", "fp-test")
+
+    assert storage.get_search_preference("user_a")["search_mode"] == "always"
+    assert storage.get_search_preference("user_a")["max_results"] == 4
+    assert storage.get_search_preference("user_b")["search_mode"] == "auto"
+    assert storage.get_search_key_view("user_a", "tavily")["fingerprint"] == "fp-test"
+    assert storage.get_search_key_ciphertext("user_b", "tavily") is None
+
+
+def test_storage_preserves_run_search_mode(tmp_path):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+
+    run = storage.create_run(
+        "user_a",
+        RunCreate(
+            question="What is the latest evidence?",
+            provider="tinker",
+            search_mode="always",
+        ),
+    )
+
+    assert run["search_mode"] == "always"
+    assert storage.get_run("user_a", run["run_id"])["search_mode"] == "always"
+
+
 def test_benchmark_report_uses_labeled_graphs():
     report = build_benchmark_report(
         [

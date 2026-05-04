@@ -200,7 +200,7 @@ def source_quality(chunk: Dict[str, Any]) -> str:
         return "high"
     if any(domain in url for domain in [".edu", ".gov", "docs.", "arxiv.org", "aclanthology.org"]):
         return "high"
-    if source_type in {"web_page", "uploaded_document", "manual_source"}:
+    if source_type in {"web_page", "web_search_result", "uploaded_document", "manual_source"}:
         return "medium"
     return "low"
 
