@@ -1,4 +1,5 @@
 import { exportUrl } from "./api";
+import { MarkdownText } from "./markdown";
 import type { SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph } from "./types";
 
@@ -89,7 +90,7 @@ function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
       </section>
       <section className="answer-main">
         <h3>Answer</h3>
-        <p>{graph.answer.final_answer}</p>
+        <MarkdownText text={graph.answer.final_answer} />
         {graph.answer.recommendation && (
           <>
             <h3>Recommendation</h3>
@@ -391,6 +392,21 @@ function Table({ columns, rows }: { columns: string[]; rows: string[][] }) {
           ))}
         </tbody>
       </table>
+      <div className="table-cards">
+        {rows.map((row, rowIndex) => (
+          <article key={rowIndex}>
+            <strong>{row[0]}</strong>
+            <dl>
+              {row.slice(1).map((cell, cellIndex) => (
+                <div key={`${rowIndex}-${cellIndex}`}>
+                  <dt>{columns[cellIndex + 1]}</dt>
+                  <dd>{cell}</dd>
+                </div>
+              ))}
+            </dl>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }

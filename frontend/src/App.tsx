@@ -20,6 +20,7 @@ import {
   uploadDocument,
 } from "./api";
 import { ActivityTrace, ChatComposer, ConversationList, KeyManager, ProviderSettings, SearchSettings, formatTraceOutput } from "./components";
+import { MarkdownText } from "./markdown";
 import { AnswerCitations, ReliabilityCards, ReliabilityDetails } from "./report";
 import type {
   ConversationMessage,
@@ -119,6 +120,7 @@ function App() {
     setConversation(null);
     setDraft("");
     setAttachments([]);
+    setDraftSearchMode(searchPreference?.preference.search_mode ?? "auto");
     setEvents([]);
     setStreamGraph(null);
     setStreamingRunId(null);
@@ -542,7 +544,7 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
     <article className="message-row assistant-message">
       <div className="avatar" aria-hidden="true">RG</div>
       <div className="message-content">
-        <p>{message.content}</p>
+        <MarkdownText text={message.content} />
         {graph && (
           <>
             <AnswerCitations graph={graph} />
@@ -592,7 +594,7 @@ function PendingAssistant({ events, graph, progress }: { events: StreamEvent[]; 
         <ActivityTrace events={events} progress={progress} defaultOpen />
         {graph && (
           <>
-            <p>{graph.answer.final_answer}</p>
+            <MarkdownText text={graph.answer.final_answer} />
             <AnswerCitations graph={graph} />
             <ReliabilityCards graph={graph} />
           </>

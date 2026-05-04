@@ -104,6 +104,7 @@ export function ChatComposer({
   onOpenSettings,
 }: ChatComposerProps) {
   const [urlDraft, setUrlDraft] = useState("");
+  const [toolsOpen, setToolsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const disabled = busy || value.trim().length < 3 || !providerReady;
   const canAddUrl = !busy && urlDraft.trim().length > 0;
@@ -189,7 +190,7 @@ export function ChatComposer({
             Add
           </button>
         </div>
-        <details className="tools-menu">
+        <details className="tools-menu" open={toolsOpen} onToggle={(event) => setToolsOpen(event.currentTarget.open)}>
           <summary>Search: {searchModeLabel(searchMode)}</summary>
           <div className="search-mode-options">
             {(["auto", "always", "off"] as SearchMode[]).map((mode) => (
@@ -199,7 +200,10 @@ export function ChatComposer({
                   name="search-mode"
                   type="radio"
                   value={mode}
-                  onChange={() => onSearchModeChange(mode)}
+                  onChange={() => {
+                    onSearchModeChange(mode);
+                    setToolsOpen(false);
+                  }}
                 />
                 <span>{searchModeLabel(mode)}</span>
               </label>
@@ -207,7 +211,7 @@ export function ChatComposer({
           </div>
         </details>
         <div className="composer-status">
-          {providerReady ? "Ready" : connectedProviderCount === 0 ? "Connect a provider in Settings" : "Choose a default provider in Settings"}
+          {busy ? "Working" : providerReady ? "Ready" : connectedProviderCount === 0 ? "Connect a provider in Settings" : "Choose a default provider in Settings"}
         </div>
         {!providerReady && (
           <button className="text-link" type="button" onClick={onOpenSettings}>

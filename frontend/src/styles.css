@@ -301,6 +301,35 @@ a:focus-visible {
   white-space: pre-wrap;
 }
 
+.markdown-text {
+  color: #202522;
+  line-height: 1.64;
+}
+
+.markdown-text p,
+.markdown-text ul {
+  margin: 0;
+}
+
+.markdown-text p + p,
+.markdown-text p + ul,
+.markdown-text ul + p,
+.markdown-text ul + ul {
+  margin-top: 10px;
+}
+
+.markdown-text ul {
+  padding-left: 1.25rem;
+}
+
+.markdown-text li + li {
+  margin-top: 5px;
+}
+
+.markdown-text strong {
+  font-weight: 720;
+}
+
 .message-attachments {
   color: var(--muted);
   font-size: 0.78rem;
@@ -676,6 +705,7 @@ a:focus-visible {
 
 .detail-panel {
   border-top: 1px solid var(--line);
+  container-type: inline-size;
   padding: 12px;
 }
 
@@ -856,6 +886,10 @@ label {
   width: 100%;
 }
 
+.table-cards {
+  display: none;
+}
+
 table {
   border-collapse: collapse;
   min-width: 1040px;
@@ -886,6 +920,57 @@ th {
   color: var(--muted);
   font-size: 0.72rem;
   text-transform: uppercase;
+}
+
+@container (max-width: 760px) {
+  .detail-panel .table-wrap {
+    overflow-x: visible;
+  }
+
+  .detail-panel table {
+    display: none;
+  }
+
+  .detail-panel .table-cards {
+    display: grid;
+    gap: 10px;
+  }
+
+  .detail-panel .table-cards article {
+    background: var(--surface-soft);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .detail-panel .table-cards strong {
+    display: block;
+    line-height: 1.45;
+    margin-bottom: 10px;
+  }
+
+  .detail-panel .table-cards dl {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+  }
+
+  .detail-panel .table-cards div {
+    display: grid;
+    gap: 3px;
+  }
+
+  .detail-panel .table-cards dt {
+    color: var(--muted);
+    font-size: 0.72rem;
+    font-weight: 720;
+    text-transform: uppercase;
+  }
+
+  .detail-panel .table-cards dd {
+    line-height: 1.4;
+    margin: 0;
+  }
 }
 
 .primary-link {
