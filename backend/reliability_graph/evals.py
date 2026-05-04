@@ -40,6 +40,7 @@ SECRET_PATTERNS = [
 
 ABLATION_GROUPS = {
     "claim support": ["claim_support_rate"],
+    "retrieval support": ["retrieval_alignment_score", "retrieval_peak_score"],
     "source quality": ["source_quality_score"],
     "sample consistency": ["semantic_stability"],
     "prompt robustness": ["prompt_flip_rate", "sycophancy_flip_rate"],

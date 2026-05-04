@@ -25,6 +25,22 @@ def test_score_caps_one_critical_contradiction():
     assert "critical factual claim contradicted" in caps[0]
 
 
+def test_score_does_not_overweight_low_provenance_contradiction_caps():
+    features = perfect_features()
+    features["source_quality_score"] = 0.25
+    features["retrieval_alignment_score"] = 0.9
+    features["retrieval_peak_score"] = 0.9
+
+    score, caps = compute_reliability_score(
+        features,
+        {"critical_factual_contradictions": 1, "unsupported_high_impact_assumption": True},
+    )
+
+    assert score > 70
+    assert not any("critical factual claim contradicted" in cap for cap in caps)
+    assert not any("unsupported high-impact assumption" in cap for cap in caps)
+
+
 def test_score_caps_multiple_critical_contradictions_before_other_caps():
     score, caps = compute_reliability_score(
         perfect_features(),
@@ -63,8 +79,23 @@ def test_score_caps_low_provenance_single_sample_evidence():
     features["source_quality_score"] = 0.25
     features["sample_overlap_stability"] = 0.5
     features["retrieval_alignment_score"] = 0.72
+    features["retrieval_peak_score"] = 0.72
 
     score, caps = compute_reliability_score(features, {})
 
     assert score == 70
     assert any("low-provenance single-sample evidence" in cap for cap in caps)
+
+
+def test_score_uses_peak_retrieval_support_when_available():
+    features = perfect_features()
+    features["claim_support_rate"] = 0.2
+    features["retrieval_alignment_score"] = 0.1
+    features["retrieval_peak_score"] = 0.9
+    features["sample_overlap_stability"] = 0.5
+    features["source_quality_score"] = 0.62
+
+    score, caps = compute_reliability_score(features, {})
+
+    assert score >= 60
+    assert caps == []

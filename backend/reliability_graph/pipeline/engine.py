@@ -736,6 +736,7 @@ class ReliabilityPipeline:
         decision_margin = state["decision_analysis"].get("decision_margin", 0.0) if state["decision_analysis"]["applicable"] else 0.5
         source_quality = self._source_quality_score(state["evidence"])
         retrieval_alignment = self._retrieval_alignment_score(state)
+        retrieval_peak = self._retrieval_peak_score(state)
         sample_overlap = self._sample_overlap_stability(state["candidate_answers"])
         prompt_flip_rate = self._prompt_flip_rate(state.get("perturbation_probe", {}).get("results") or state.get("stress_tests", []))
         features = {
@@ -746,6 +747,7 @@ class ReliabilityPipeline:
             "sample_overlap_stability": sample_overlap,
             "source_quality_score": source_quality,
             "retrieval_alignment_score": retrieval_alignment,
+            "retrieval_peak_score": retrieval_peak,
             "sample_disagreement_rate": 1.0 - state["semantic_stability"],
             "prompt_flip_rate": prompt_flip_rate,
             "sycophancy_flip_rate": state["sycophancy_flip_rate"],
@@ -794,6 +796,12 @@ class ReliabilityPipeline:
                 best *= 0.25
             scores.append(max(0.0, min(1.0, best)))
         return round(sum(scores) / float(len(scores) or 1), 4)
+
+    def _retrieval_peak_score(self, state: Dict[str, Any]) -> float:
+        if not self.retrieval_chunks:
+            return 0.0
+        scores = [float(item.get("relevance_score", 0.0)) for item in state.get("evidence", [])]
+        return round(max(scores) if scores else 0.0, 4)
 
     def _sample_overlap_stability(self, candidates: List[Dict[str, Any]]) -> float:
         if len(candidates) <= 1:
@@ -1434,7 +1442,10 @@ class ReliabilityPipeline:
             cap = "perturbation check flipped answer without new evidence: score capped at 55"
             if cap not in state["score_caps"]:
                 state["score_caps"].append(cap)
-        if any(item.get("relation") == "contradicted" for item in state.get("claim_assessments", [])):
+        if (
+            state.get("features", {}).get("source_quality_score", 0.0) >= 0.50
+            and any(item.get("relation") == "contradicted" for item in state.get("claim_assessments", []))
+        ):
             state["score"] = min(int(state.get("score", 0)), 60)
             cap = "source contradiction found: score capped at 60"
             if cap not in state["score_caps"]:

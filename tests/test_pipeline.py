@@ -104,6 +104,7 @@ def test_pipeline_uses_document_evidence_for_claim_matching():
 
     assert any(item["source_type"] == "uploaded_document" for item in graph["evidence"])
     assert any(assessment["status"] in {"supported", "partially_supported"} for assessment in graph["claim_assessments"])
+    assert graph["features"]["retrieval_peak_score"] >= graph["features"]["retrieval_alignment_score"]
 
 
 def test_no_source_factual_question_is_capped_without_system_trace_source():

@@ -49,7 +49,7 @@ Use dev for tuning. Use test/full only after fixes pass dev gates.
 - ECE and Brier treat the score as an eval signal only, not a user-facing probability.
 - Risk coverage reports how many answers remain above score thresholds and their empirical correctness.
 - False-safe rate counts bad labeled examples that receive `rely` or score `>= 75`.
-- Ablations recompute the scoring formula with signal groups removed to show directional score sensitivity.
+- Ablations recompute the scoring formula with signal groups removed to show directional score sensitivity, including average and peak retrieval support.
 - RAGTruth adds task/model/label-type breakdowns.
 - SelfCheckGPT adds sentence NonFact AUC-PR, sentence Factual AUC-PR, and passage Pearson/Spearman.
 - SimpleQA uses deterministic grading first; live provider grading is used only for ambiguous live answers when configured.
