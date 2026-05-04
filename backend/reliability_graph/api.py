@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import re
-from typing import Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -377,7 +377,7 @@ async def stream_run_events(run_id: str):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-async def _prepare_retrieval_for_run(run: dict, attachment_document_ids: list[str]):
+async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document_ids: List[str]):
     preference = storage.get_search_preference(settings.user_id)
     route = choose_research_route(
         run["question"],
@@ -469,7 +469,7 @@ async def _prepare_retrieval_for_run(run: dict, attachment_document_ids: list[st
     return pre_trace, retrieval_document_ids, web_search
 
 
-def _index_web_search_results(results: list[dict]) -> list[dict]:
+def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str, object]]:
     documents = []
     for result in results:
         content = result["content"]
