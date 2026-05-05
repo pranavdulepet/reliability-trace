@@ -192,9 +192,13 @@ def support_relation(claim: str, snippet: str) -> str:
     claim_tokens = set(tokenize(claim_for_tokens))
     snippet_tokens = set(tokenize(snippet))
     overlap = len(claim_tokens & snippet_tokens) / float(len(claim_tokens) or 1)
+    claim_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", claim_lower))
+    snippet_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", snippet_lower))
 
     if claim_lower.strip(". ") in snippet_lower:
         return "supports"
+    if overlap >= 0.25 and claim_numbers and snippet_numbers and not claim_numbers.issubset(snippet_numbers):
+        return "contradicts"
     if overlap >= 0.3 and len(claim_tokens & snippet_tokens) >= 3 and _has_direct_contradiction(claim_tokens, snippet_lower):
         return "contradicts"
     if claim_tokens and claim_tokens.issubset(snippet_tokens):

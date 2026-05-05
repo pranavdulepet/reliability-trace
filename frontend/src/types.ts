@@ -184,6 +184,7 @@ export interface ClaimAssessment {
   why?: string;
   source_limit?: string;
   evidence_ids: string[];
+  assessment_method?: string;
 }
 
 export interface Assumption {

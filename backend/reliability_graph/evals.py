@@ -368,6 +368,7 @@ def baseline_report(results: List[Dict[str, Any]]) -> Dict[str, Any]:
                         "score": 1.0 - value,
                         "bad_answer": bool(result.get("metrics", {}).get("bad_answer")),
                         "correctness": float(correctness),
+                        "relation_detected": bool(result.get("metrics", {}).get("relation_detected")),
                         "false_safe": bool(result.get("metrics", {}).get("bad_answer")) and value <= 0.25,
                     }
                 }

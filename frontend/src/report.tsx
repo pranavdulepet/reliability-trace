@@ -118,7 +118,7 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
   const assessments = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
   return (
     <Table
-      columns={["Claim", "Type", "Importance", "Relation", "Why", "Source limit"]}
+      columns={["Claim", "Type", "Importance", "Relation", "Method", "Why", "Source limit"]}
       rows={graph.claims.map((claim) => {
         const assessment = assessments.get(claim.claim_id);
         return [
@@ -126,6 +126,7 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
           claim.type,
           claim.importance,
           assessment?.relation ?? assessment?.status ?? "unassessed",
+          formatStatus(assessment?.assessment_method ?? "unassessed"),
           assessment?.why ?? assessment?.explanation ?? "",
           assessment?.source_limit ?? `${assessment?.evidence_ids.length ?? 0} matched evidence item(s)`,
         ];

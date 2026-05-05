@@ -50,6 +50,8 @@ The pipeline emits provider-neutral verdict fields on every completed graph:
 
 Reliability scoring is diagnostic. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
 
+Claim checking has two layers. The deterministic layer matches claims to retrieved chunks and catches direct support, missing support, simple numeric/date conflicts, and polarity contradictions. When a live provider and evidence are available, a provider-backed structured evidence classifier can reassess each checkable claim against only its retrieved snippets. Source text is always treated as untrusted evidence, never instructions; provider output is schema-validated, retried once on invalid JSON, redacted, and discarded back to deterministic checks on failure. Claims marked `not_checkable` remain unscored even if a provider returns a supported relation.
+
 ## Frontend
 
 The frontend is a React + TypeScript app. It presents:

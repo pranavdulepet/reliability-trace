@@ -65,6 +65,13 @@ def test_support_relation_detects_direct_negation_near_claim_terms():
     assert support_relation(claim, snippet) == "contradicts"
 
 
+def test_support_relation_detects_numeric_conflict():
+    claim = "Python 3.14.4 is the latest stable release."
+    snippet = "Python 3.12.10 is the latest stable release."
+
+    assert support_relation(claim, snippet) == "contradicts"
+
+
 def test_storage_saves_documents_and_searches_chunks(tmp_path):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()

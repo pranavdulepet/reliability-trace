@@ -202,3 +202,21 @@ def test_selfcheck_sentence_metrics_and_baselines():
 
     assert summary["benchmark_details"]["selfcheck"]["sentence_nonfact_auprc"] == 1.0
     assert baseline_report([result])["claim_support_only"]["scored_count"] == 1
+
+
+def test_baseline_report_preserves_relation_recall_metric():
+    result = {
+        "benchmark": "ragtruth",
+        "example_id": "r1",
+        "features": {"claim_support_rate": 0.1, "retrieval_alignment_score": 0.2, "semantic_stability": 0.3},
+        "metrics": {
+            "score": 0.2,
+            "risk_score": 0.8,
+            "correctness": 0.0,
+            "bad_answer": True,
+            "false_safe": False,
+            "relation_detected": True,
+        },
+    }
+
+    assert baseline_report([result])["full_score"]["claim_relation_recall_on_bad"] == 1.0
