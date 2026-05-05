@@ -171,6 +171,93 @@ def test_provider_claim_extraction_accepts_array_json_root(monkeypatch):
     assert graph["claims"][0]["claim_id"] == "c1"
 
 
+def test_factual_claim_marked_not_checkable_is_still_checked(monkeypatch):
+    provider = FakeProvider(
+        answer="Retrieval-augmented generation combines retrieval with language-model generation.",
+        claims=[
+            {
+                "text": "Retrieval-augmented generation combines retrieval with language-model generation.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "not_checkable",
+            }
+        ],
+        evidence_relation="supported",
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="Explain retrieval-augmented generation.", attachment_document_ids=["doc_1"]),
+        chunk_source("Retrieval-augmented generation combines retrieval with language-model generation."),
+    )[-1]["graph"]
+
+    assert graph["claims"][0]["checkability"] == "externally_checkable"
+    assert graph["claim_assessments"][0]["relation"] == "supported"
+    assert graph["features"]["claim_support_rate"] == 1.0
+
+
+def test_explanation_for_decision_context_is_mixed():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+
+    question_type = pipeline._classify_question(
+        "Explain retrieval-augmented generation to a product manager deciding whether to add it to a support chatbot."
+    )
+
+    assert question_type == "mixed"
+
+
+def test_list_numbers_do_not_create_sample_conflicts():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    left = (
+        "RAG has two main steps:\n"
+        "1. Retrieval finds relevant source material.\n"
+        "2. Generation uses that material to answer."
+    )
+    right = "RAG retrieves relevant source material and then uses it during generation to answer more accurately."
+
+    assert pipeline._answers_conflict(left, right) is False
+    assert pipeline._sample_conflict_rate(
+        [
+            {"answer_text": left},
+            {"answer_text": right},
+        ]
+    ) == 0.0
+
+
+def test_recommendation_extraction_prefers_actual_recommendation_over_factor_sentence():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    answer = (
+        "Cost: RAG may require additional infrastructure and maintenance costs, which should be factored into planning. "
+        "I recommend evaluating your support volume, data quality, and integration cost before adding RAG."
+    )
+
+    recommendation = pipeline._recommendation_from_text(answer)
+
+    assert recommendation == "I recommend evaluating your support volume, data quality, and integration cost before adding RAG."
+
+
+def test_majority_cluster_share_drives_semantic_stability():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    candidates = [
+        {
+            "candidate_id": "cand_1",
+            "answer_text": "RAG retrieves relevant source material and uses it during generation to answer support questions.",
+        },
+        {
+            "candidate_id": "cand_2",
+            "answer_text": "Retrieval-augmented generation answers support questions by retrieving relevant sources before generating.",
+        },
+        {
+            "candidate_id": "cand_3",
+            "answer_text": "You should not add RAG because it is always unsafe.",
+        },
+    ]
+
+    _clusters, stability, _entropy = pipeline._cluster_candidates(candidates)
+
+    assert stability >= 2 / 3
+
+
 def test_graph_validation_rejects_missing_reliability_fields(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)

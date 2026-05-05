@@ -171,6 +171,7 @@ export interface EvidenceItem {
   snippet: string;
   support_relation: string;
   source_quality: string;
+  relevance_score?: number;
 }
 
 export interface AnswerCitation {

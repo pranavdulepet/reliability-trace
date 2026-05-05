@@ -1,7 +1,7 @@
 import { exportUrl } from "./api";
 import { MarkdownText } from "./markdown";
-import { useState } from "react";
-import type { SyntheticEvent } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph, TraceSpan } from "./types";
 
 export const TABS = [
@@ -188,15 +188,8 @@ function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {
   }
   return (
     <Table
-      columns={["Source", "Type", "Date", "Quality", "Relation", "Snippet"]}
-      rows={evidence.map((item: EvidenceItem) => [
-        item.source_title,
-        item.source_type,
-        item.source_date ?? "not dated",
-        item.source_quality,
-        item.support_relation,
-        item.snippet,
-      ])}
+      columns={["Source", "Type", "Date", "Quality", "Relation", "Matches", "Snippet"]}
+      rows={sourceEvidenceRows(evidence)}
     />
   );
 }
@@ -508,24 +501,61 @@ type InfoTopic =
 function InfoIcon({ topic }: { topic: InfoTopic | ReportTab }) {
   const info = INFO_COPY[topic as InfoTopic] ?? INFO_COPY["Reliability score"];
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<{ left: number; top: number; width: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+
+  function positionPanel() {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.min(360, window.innerWidth - 24);
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
+    const estimatedHeight = Math.min(360, window.innerHeight - 24);
+    const below = rect.bottom + 8;
+    const top = below + estimatedHeight > window.innerHeight ? Math.max(12, rect.top - estimatedHeight - 8) : below;
+    setPosition({ left, top, width });
+  }
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    positionPanel();
+    window.addEventListener("resize", positionPanel);
+    window.addEventListener("scroll", positionPanel, true);
+    return () => {
+      window.removeEventListener("resize", positionPanel);
+      window.removeEventListener("scroll", positionPanel, true);
+    };
+  }, [open]);
+
+  const panelStyle = position ? ({ left: position.left, top: position.top, width: position.width } satisfies CSSProperties) : undefined;
+
   return (
-    <span className={open ? "info-wrap open" : "info-wrap"} onMouseLeave={() => setOpen(false)}>
+    <span className={open ? "info-wrap open" : "info-wrap"}>
       <button
         aria-expanded={open}
         aria-label={`About ${topic}`}
         className="info-icon"
-        type="button"
+        ref={buttonRef}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
         onClick={(event) => {
           event.stopPropagation();
-          setOpen((current) => !current);
+          setOpen((current) => {
+            if (!current) positionPanel();
+            return !current;
+          });
         }}
-        onFocus={() => setOpen(true)}
-        onMouseEnter={() => setOpen(true)}
+        onFocus={() => {
+          positionPanel();
+          setOpen(true);
+        }}
+        onMouseEnter={() => {
+          positionPanel();
+          setOpen(true);
+        }}
+        type="button"
       >
         i
       </button>
-      <span className="info-panel" role="tooltip">
+      <span className="info-panel" role="tooltip" style={panelStyle}>
         <strong>{topic}</strong>
         <span>What this means: {info.meaning}</span>
         <span>How it is computed: {info.computed}</span>
@@ -724,13 +754,86 @@ function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
 function sourceSummary(graph: ReliabilityGraph): string {
   const external = externalEvidence(graph);
   if (external.length === 0) return graph.answer.source_limitations ?? "No attached, fetched, or web source supports this answer.";
-  const titles = Array.from(new Set(external.map((item) => item.source_title))).slice(0, 2);
-  const extra = external.length > titles.length ? ` + ${external.length - titles.length} more` : "";
-  return `${external.length} source match${external.length === 1 ? "" : "es"} · ${titles.join(" · ")}${extra}`;
+  const groups = groupedEvidence(external);
+  const titles = groups.slice(0, 2).map((item) => item.title);
+  const matchCount = external.length;
+  const extra = groups.length > titles.length ? ` + ${groups.length - titles.length} more` : "";
+  return `${groups.length} source${groups.length === 1 ? "" : "s"} · ${matchCount} claim match${matchCount === 1 ? "" : "es"} · ${titles.join(" · ")}${extra}`;
 }
 
 function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {
   return graph.evidence.filter((item) => item.source_type !== "system_trace" && item.source_type !== "internal_policy");
+}
+
+function sourceEvidenceRows(evidence: EvidenceItem[]): string[][] {
+  return groupedEvidence(evidence).map((group) => [
+    group.title,
+    group.type,
+    group.date,
+    group.quality,
+    group.relation,
+    String(group.matches),
+    group.snippets.slice(0, 2).join(" / "),
+  ]);
+}
+
+function groupedEvidence(evidence: EvidenceItem[]) {
+  const groups = new Map<
+    string,
+    {
+      title: string;
+      type: string;
+      date: string;
+      quality: string;
+      relation: string;
+      matches: number;
+      snippets: string[];
+      bestScore: number;
+    }
+  >();
+  for (const item of evidence) {
+    const key = item.source_url || `${item.source_title}:${item.source_type}`;
+    const existing = groups.get(key);
+    const score = Number(item.relevance_score ?? 0);
+    if (!existing) {
+      groups.set(key, {
+        title: item.source_title || item.source_url || "Untitled source",
+        type: item.source_type,
+        date: item.source_date ?? "not dated",
+        quality: item.source_quality,
+        relation: item.support_relation,
+        matches: 1,
+        snippets: item.snippet ? [item.snippet] : [],
+        bestScore: score,
+      });
+      continue;
+    }
+    existing.matches += 1;
+    existing.bestScore = Math.max(existing.bestScore, score);
+    if (qualityRank(item.source_quality) > qualityRank(existing.quality)) existing.quality = item.source_quality;
+    if (relationRank(item.support_relation) > relationRank(existing.relation)) existing.relation = item.support_relation;
+    if (item.snippet && !existing.snippets.includes(item.snippet) && existing.snippets.length < 2) {
+      existing.snippets.push(item.snippet);
+    }
+  }
+  return Array.from(groups.values()).sort((left, right) => {
+    const relationDelta = relationRank(right.relation) - relationRank(left.relation);
+    if (relationDelta !== 0) return relationDelta;
+    return right.bestScore - left.bestScore;
+  });
+}
+
+function relationRank(relation: string): number {
+  if (relation === "contradicts") return 4;
+  if (relation === "supports") return 3;
+  if (relation === "partially_supports") return 2;
+  return 1;
+}
+
+function qualityRank(quality: string): number {
+  if (quality === "high") return 3;
+  if (quality === "medium") return 2;
+  return 1;
 }
 
 function answerMeta(graph: ReliabilityGraph) {
