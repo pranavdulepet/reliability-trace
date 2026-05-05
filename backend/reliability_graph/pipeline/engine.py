@@ -549,7 +549,7 @@ class ReliabilityPipeline:
                 )
             )
             try:
-                data = self._json_from_model_text(response.text)
+                data = self._normalize_claim_json_root(self._json_value_from_model_text(response.text))
             except ProviderError as exc:
                 last_error = str(exc)
                 continue
@@ -685,7 +685,7 @@ class ReliabilityPipeline:
                 )
             )
             try:
-                data = self._json_from_model_text(response.text)
+                data = self._normalize_assumption_json_root(self._json_value_from_model_text(response.text))
             except ProviderError as exc:
                 last_error = str(exc)
                 continue
@@ -1063,7 +1063,7 @@ class ReliabilityPipeline:
                 )
             )
             try:
-                data = self._json_from_model_text(response.text)
+                data = self._normalize_evidence_assessment_json_root(self._json_value_from_model_text(response.text))
             except ProviderError as exc:
                 last_error = str(exc)
                 continue
@@ -1837,34 +1837,38 @@ class ReliabilityPipeline:
         parts = re.split(r"(?<=[.!?])\s+", cleaned)
         return [part.strip(" -•\t") for part in parts if part.strip(" -•\t")]
 
-    def _json_from_model_text(self, text: str) -> Dict[str, Any]:
+    def _json_value_from_model_text(self, text: str) -> Any:
         cleaned = text.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE).strip()
             if "```" in cleaned:
                 cleaned = cleaned.split("```", 1)[0].strip()
         candidates = [cleaned]
-        balanced = self._first_balanced_json_object(cleaned)
+        balanced = self._first_balanced_json_value(cleaned)
         if balanced and balanced not in candidates:
             candidates.append(balanced)
         last_error: Optional[json.JSONDecodeError] = None
         for candidate in candidates:
             try:
-                data = json.loads(candidate)
-                break
+                return json.loads(candidate)
             except json.JSONDecodeError as exc:
                 last_error = exc
-        else:
-            raise ProviderError("provider did not return valid JSON") from last_error
+        raise ProviderError("provider did not return valid JSON") from last_error
+
+    def _json_from_model_text(self, text: str) -> Dict[str, Any]:
+        data = self._json_value_from_model_text(text)
         if not isinstance(data, dict):
             raise ProviderError("provider JSON root must be an object")
         return data
 
-    def _first_balanced_json_object(self, text: str) -> Optional[str]:
-        start = text.find("{")
-        if start < 0:
+    def _first_balanced_json_value(self, text: str) -> Optional[str]:
+        object_start = text.find("{")
+        array_start = text.find("[")
+        starts = [index for index in [object_start, array_start] if index >= 0]
+        if not starts:
             return None
-        depth = 0
+        start = min(starts)
+        stack: List[str] = []
         in_string = False
         escaped = False
         for index in range(start, len(text)):
@@ -1880,12 +1884,53 @@ class ReliabilityPipeline:
             if char == '"':
                 in_string = True
             elif char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
+                stack.append("}")
+            elif char == "[":
+                stack.append("]")
+            elif char in {"}", "]"}:
+                if not stack or char != stack[-1]:
+                    return None
+                stack.pop()
+                if not stack:
                     return text[start : index + 1]
         return None
+
+    def _normalize_claim_json_root(self, data: Any) -> Dict[str, Any]:
+        if isinstance(data, list):
+            return {"claims": data}
+        if isinstance(data, dict):
+            if isinstance(data.get("claims"), list):
+                return data
+            if isinstance(data.get("claim"), dict):
+                normalized = dict(data)
+                normalized["claims"] = [data["claim"]]
+                return normalized
+            if "text" in data:
+                return {"claims": [data]}
+            return data
+        raise ProviderError("claim JSON root must be an object or array")
+
+    def _normalize_assumption_json_root(self, data: Any) -> Dict[str, Any]:
+        if isinstance(data, list):
+            return {"assumptions": data}
+        if isinstance(data, dict):
+            if isinstance(data.get("assumptions"), list):
+                return data
+            if isinstance(data.get("assumption"), dict):
+                normalized = dict(data)
+                normalized["assumptions"] = [data["assumption"]]
+                return normalized
+            if "text" in data:
+                return {"assumptions": [data]}
+            return data
+        raise ProviderError("assumption JSON root must be an object or array")
+
+    def _normalize_evidence_assessment_json_root(self, data: Any) -> Dict[str, Any]:
+        if isinstance(data, list):
+            return {"assessments": data}
+        if isinstance(data, dict):
+            return data
+        raise ProviderError("evidence assessment JSON root must be an object or array")
 
     def _validate_claim_json(self, data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
         raw_claims = data.get("claims")

@@ -147,6 +147,30 @@ def test_provider_claim_json_failure_fails_run(monkeypatch):
         raise AssertionError("invalid provider claim JSON did not fail")
 
 
+def test_provider_claim_extraction_accepts_array_json_root(monkeypatch):
+    provider = FakeProvider(
+        claims_raw=[
+            json.dumps(
+                [
+                    {
+                        "text": "ReliabilityGraph checks answer claims against source evidence.",
+                        "type": "factual",
+                        "importance": "high",
+                        "checkability": "externally_checkable",
+                        "answer_quote": "ReliabilityGraph checks answer claims against source evidence.",
+                    }
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(base_run(question="What is ReliabilityGraph?"))[-1]["graph"]
+
+    assert graph["claims"][0]["text"] == "ReliabilityGraph checks answer claims against source evidence."
+    assert graph["claims"][0]["claim_id"] == "c1"
+
+
 def test_graph_validation_rejects_missing_reliability_fields(monkeypatch):
     provider = FakeProvider()
     monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
@@ -199,6 +223,30 @@ def test_provider_assumption_json_failure_fails_run(monkeypatch):
         assert exc.stage == "assumption_extraction"
     else:
         raise AssertionError("invalid provider assumption JSON did not fail")
+
+
+def test_provider_assumption_extraction_accepts_array_json_root(monkeypatch):
+    provider = FakeProvider(
+        assumptions_raw=[
+            json.dumps(
+                [
+                    {
+                        "text": "The answer should be checked against current source evidence.",
+                        "importance": "high",
+                        "evidence_status": "untested",
+                        "would_change_recommendation_if_false": True,
+                        "sensitivity_notes": "Trust should change if the source evidence conflicts with the answer.",
+                    }
+                ]
+            )
+        ]
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(base_run(question="What is ReliabilityGraph?"))[-1]["graph"]
+
+    assert graph["assumptions"][0]["text"] == "The answer should be checked against current source evidence."
+    assert graph["assumptions"][0]["assumption_id"] == "a1"
 
 
 def test_attached_source_support_uses_provider_and_entailment_verifier(monkeypatch):
@@ -262,6 +310,43 @@ def test_provider_evidence_assessment_accepts_compact_claim_json(monkeypatch):
 
     assert graph["claim_assessments"][0]["provider_relation"] == "supported"
     assert any('"claim":{"claim_id":"c1"' in prompt for prompt in provider.user_prompts)
+
+
+def test_provider_evidence_assessment_accepts_array_json_root(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 2, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 2, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_raw=[
+            json.dumps(
+                [
+                    {
+                        "claim_id": "c1",
+                        "relation": "supported",
+                        "why": "The source states the same release date.",
+                        "source_limit": "Limited to the retrieved snippet.",
+                        "support_score": 0.92,
+                        "evidence_ids": ["e1"],
+                    }
+                ]
+            )
+        ],
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+        chunk_source("ExampleOS 9 was released on April 2, 2026."),
+    )[-1]["graph"]
+
+    assert graph["claim_assessments"][0]["provider_relation"] == "supported"
+    assert graph["claim_assessments"][0]["assessment_method"] == "provider_entailment_verifier"
 
 
 def test_provider_evidence_assessment_retries_and_extracts_wrapped_json(monkeypatch):
