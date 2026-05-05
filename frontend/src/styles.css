@@ -1,5 +1,7 @@
 :root {
   --rail-width: 280px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --bg: #fbfbfa;
   --surface: #ffffff;
   --surface-soft: #f5f6f4;
@@ -16,7 +18,7 @@
   --shadow: 0 18px 48px rgba(20, 22, 21, 0.06);
   color: var(--text);
   background: var(--bg);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -30,6 +32,8 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--bg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -37,6 +41,7 @@ input,
 select,
 textarea {
   font: inherit;
+  font-family: var(--font-sans);
   letter-spacing: 0;
 }
 
@@ -66,7 +71,6 @@ button:disabled {
 
 button:not(:disabled):active,
 .attachment-button:not(.disabled-control):active,
-.tools-menu summary:active,
 .citation-row a:active {
   transform: translateY(1px) scale(0.99);
 }
@@ -76,7 +80,6 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 .attachment-button:focus-within,
-.tools-menu summary:focus-visible,
 a:focus-visible {
   outline: 2px solid rgba(8, 116, 67, 0.32);
   outline-offset: 2px;
@@ -227,6 +230,7 @@ a:focus-visible {
 .thread-layout {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  height: 100vh;
   min-height: 100vh;
 }
 
@@ -234,9 +238,9 @@ a:focus-visible {
   margin: 0 auto;
   max-width: 900px;
   overflow: auto;
-  padding: 52px 22px 280px;
+  padding: 52px 22px 28px;
   scroll-behavior: smooth;
-  scroll-padding-bottom: 260px;
+  scroll-padding-bottom: 28px;
   scrollbar-gutter: stable;
   width: 100%;
 }
@@ -321,24 +325,68 @@ a:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.cited-answer {
-  white-space: pre-wrap;
-}
-
 .markdown-text p,
-.markdown-text ul {
+.markdown-text ul,
+.markdown-text ol,
+.markdown-text blockquote,
+.markdown-text pre,
+.markdown-text table,
+.markdown-text h2,
+.markdown-text h3,
+.markdown-text h4 {
   margin: 0;
 }
 
 .markdown-text p + p,
 .markdown-text p + ul,
+.markdown-text p + ol,
+.markdown-text p + blockquote,
+.markdown-text p + .markdown-code,
 .markdown-text ul + p,
-.markdown-text ul + ul {
+.markdown-text ul + ul,
+.markdown-text ul + ol,
+.markdown-text ol + p,
+.markdown-text ol + ul,
+.markdown-text blockquote + p,
+.markdown-text .markdown-code + p,
+.markdown-text .markdown-table-wrap + p {
   margin-top: 10px;
 }
 
-.markdown-text ul {
+.markdown-text h2,
+.markdown-text h3,
+.markdown-text h4 {
+  color: var(--text);
+  font-weight: 720;
+  line-height: 1.25;
+  margin-top: 16px;
+}
+
+.markdown-text h2:first-child,
+.markdown-text h3:first-child,
+.markdown-text h4:first-child {
+  margin-top: 0;
+}
+
+.markdown-text h2 {
+  font-size: 1.15rem;
+}
+
+.markdown-text h3 {
+  font-size: 1.05rem;
+}
+
+.markdown-text h4 {
+  font-size: 0.98rem;
+}
+
+.markdown-text ul,
+.markdown-text ol {
   padding-left: 1.25rem;
+}
+
+.markdown-text li {
+  padding-left: 0.1rem;
 }
 
 .markdown-text li + li {
@@ -347,6 +395,70 @@ a:focus-visible {
 
 .markdown-text strong {
   font-weight: 720;
+}
+
+.markdown-text em {
+  font-style: italic;
+}
+
+.markdown-text code {
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  padding: 0.12em 0.32em;
+}
+
+.markdown-code {
+  background: #101311;
+  border-radius: 8px;
+  color: #eff5f2;
+  font-family: var(--font-mono);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  margin-top: 12px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre;
+}
+
+.markdown-code code {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+}
+
+.markdown-text blockquote {
+  border-left: 3px solid var(--line-strong);
+  color: var(--text-soft);
+  padding-left: 12px;
+}
+
+.markdown-text hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 16px 0;
+}
+
+.markdown-link {
+  color: #075c37;
+  font-weight: 650;
+  text-underline-offset: 3px;
+}
+
+.markdown-table-wrap {
+  margin-top: 12px;
+  overflow-x: auto;
+  width: 100%;
+}
+
+.markdown-table {
+  min-width: 100%;
+  table-layout: auto;
 }
 
 .message-attachments {
@@ -439,11 +551,8 @@ a:focus-visible {
 
 .chat-composer {
   background: linear-gradient(180deg, rgba(251, 251, 250, 0), var(--bg) 24%);
-  bottom: 0;
-  left: var(--rail-width);
   padding: 36px 22px 20px;
-  position: fixed;
-  right: 0;
+  position: relative;
   z-index: 10;
 }
 
@@ -489,7 +598,6 @@ a:focus-visible {
 .text-link,
 .quiet-button,
 .url-adder button,
-.tools-menu summary,
 .search-state {
   background: var(--surface);
   color: var(--text);
@@ -501,7 +609,6 @@ a:focus-visible {
 .text-link:hover,
 .quiet-button:hover,
 .url-adder button:not(:disabled):hover,
-.tools-menu summary:hover,
 .search-state:hover,
 .conversation-item:hover,
 .rail-link:hover {
@@ -567,50 +674,6 @@ a:focus-visible {
   width: 100%;
 }
 
-.tools-menu {
-  position: relative;
-}
-
-.tools-menu summary {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-  list-style: none;
-}
-
-.tools-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.search-mode-options {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  bottom: calc(100% + 6px);
-  box-shadow: var(--shadow);
-  display: grid;
-  gap: 2px;
-  margin-top: 0;
-  min-width: 150px;
-  padding: 6px;
-  position: absolute;
-  right: 0;
-  z-index: 20;
-}
-
-.search-mode-options label {
-  align-items: center;
-  color: var(--text);
-  display: flex;
-  font-size: 0.88rem;
-  gap: 8px;
-  padding: 7px 8px;
-}
-
-.search-mode-options input {
-  width: auto;
-}
-
 .composer-status {
   color: var(--muted);
   font-size: 0.82rem;
@@ -632,10 +695,9 @@ a:focus-visible {
   gap: 7px;
   max-width: 260px;
   min-height: 32px;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   padding: 6px 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .attachment-chip span {
@@ -659,7 +721,14 @@ a:focus-visible {
   border: 1px solid var(--line);
   border-radius: 8px;
   margin-top: 14px;
+}
+
+.activity-box {
   overflow: hidden;
+}
+
+.answer-details details {
+  overflow: visible;
 }
 
 .activity-box summary,
@@ -677,6 +746,7 @@ a:focus-visible {
   display: inline-flex;
   position: relative;
   vertical-align: middle;
+  z-index: 2;
 }
 
 .info-icon {
@@ -691,6 +761,8 @@ a:focus-visible {
   height: 18px;
   justify-items: center;
   line-height: 1;
+  min-height: 18px;
+  padding: 0;
   width: 18px;
 }
 
@@ -701,12 +773,12 @@ a:focus-visible {
   color: #eff5f2;
   display: none;
   gap: 6px;
-  left: 0;
-  max-width: min(340px, 82vw);
+  max-width: min(360px, calc(100vw - 32px));
   min-width: 260px;
   padding: 10px;
   position: absolute;
-  top: calc(100% + 8px);
+  right: 0;
+  bottom: calc(100% + 8px);
   z-index: 50;
 }
 
@@ -720,7 +792,8 @@ a:focus-visible {
 }
 
 .info-wrap:hover .info-panel,
-.info-wrap:focus-within .info-panel {
+.info-wrap:focus-within .info-panel,
+.info-wrap.open .info-panel {
   display: grid;
 }
 
@@ -780,7 +853,7 @@ a:focus-visible {
   border-radius: 7px;
   color: #eff5f2;
   display: block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.5;
   margin-top: 6px;
@@ -847,6 +920,15 @@ a:focus-visible {
   border-top: 1px solid var(--line);
   container-type: inline-size;
   padding: 12px;
+}
+
+.detail-panel,
+.tab-panel,
+.table-cards,
+.table-cards article,
+.export-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .activity-list {
@@ -1078,7 +1160,8 @@ label {
 
 table {
   border-collapse: collapse;
-  min-width: 1040px;
+  min-width: 100%;
+  table-layout: fixed;
   width: 100%;
 }
 
@@ -1090,16 +1173,7 @@ td {
   padding: 9px;
   text-align: left;
   vertical-align: top;
-}
-
-th:first-child,
-td:first-child {
-  min-width: 260px;
-}
-
-th:nth-last-child(-n + 2),
-td:nth-last-child(-n + 2) {
-  min-width: 220px;
+  overflow-wrap: anywhere;
 }
 
 th {
@@ -1108,7 +1182,7 @@ th {
   text-transform: uppercase;
 }
 
-@container (max-width: 760px) {
+@container (max-width: 980px) {
   .detail-panel .table-wrap {
     overflow-x: visible;
   }
@@ -1171,6 +1245,10 @@ th {
   text-decoration: none;
 }
 
+.export-panel pre {
+  max-height: min(56vh, 520px);
+}
+
 .error-banner {
   background: #fff7f5;
   border: 1px solid #f0b8af;
@@ -1230,7 +1308,7 @@ th {
   }
 
   .chat-composer {
-    left: 0;
+    left: auto;
   }
 
   .settings-columns,
@@ -1250,7 +1328,7 @@ th {
 
 @media (max-width: 720px) {
   .thread-scroll {
-    padding: 28px 12px 260px;
+    padding: 28px 12px 18px;
   }
 
   .chat-composer {
@@ -1263,12 +1341,6 @@ th {
     align-items: stretch;
     display: grid;
     grid-template-columns: 1fr;
-  }
-
-  .search-mode-options {
-    bottom: auto;
-    position: static;
-    right: auto;
   }
 
   .url-adder {

@@ -730,7 +730,7 @@ function SettingsView(props: {
               <span>{props.verifierStatus?.message ?? "Checking verifier status..."}</span>
             </div>
           </div>
-          {!props.verifierStatus?.ready && <p className="panel-note">Run <code>python scripts/setup_nli_verifier.py</code>, then restart the backend.</p>}
+          {!props.verifierStatus?.ready && <p className="panel-note">Install the local entailment verifier, then restart the app. The setup guide includes the exact command.</p>}
         </section>
       </div>
     </div>

@@ -1,5 +1,6 @@
 import { exportUrl } from "./api";
 import { MarkdownText } from "./markdown";
+import { useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph, TraceSpan } from "./types";
 
@@ -506,11 +507,24 @@ type InfoTopic =
 
 function InfoIcon({ topic }: { topic: InfoTopic | ReportTab }) {
   const info = INFO_COPY[topic as InfoTopic] ?? INFO_COPY["Reliability score"];
+  const [open, setOpen] = useState(false);
   return (
-    <span className="info-wrap">
-      <span aria-label={`How ${topic} is calculated`} className="info-icon" role="button" tabIndex={0}>
+    <span className={open ? "info-wrap open" : "info-wrap"} onMouseLeave={() => setOpen(false)}>
+      <button
+        aria-expanded={open}
+        aria-label={`About ${topic}`}
+        className="info-icon"
+        type="button"
+        onBlur={() => window.setTimeout(() => setOpen(false), 120)}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
+        onFocus={() => setOpen(true)}
+        onMouseEnter={() => setOpen(true)}
+      >
         i
-      </span>
+      </button>
       <span className="info-panel" role="tooltip">
         <strong>{topic}</strong>
         <span>What this means: {info.meaning}</span>
@@ -537,7 +551,7 @@ const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research
   },
   Evidence: {
     meaning: "Whether attached, fetched, or web sources support the checked claims.",
-    computed: "Provider claim judgments are combined conservatively with an entailment verifier over retrieved snippets.",
+    computed: "The selected model judges each claim against retrieved snippets, then an entailment verifier checks whether the snippet supports, partially supports, contradicts, or does not contain the claim.",
     research: "Atomic factuality and source-grounded evaluation.",
     limit: "Retrieval can miss better sources, and weak sources can still be wrong.",
   },
@@ -555,13 +569,13 @@ const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research
   },
   Sources: {
     meaning: "The evidence snippets used for claim checking.",
-    computed: "Built from uploads, URLs, and web results after retrieval and deduplication.",
+    computed: "Built from uploaded files, attached URLs, and web results after retrieval and duplicate removal.",
     research: "Search-augmented factuality checking and grounded generation.",
     limit: "Sources are evidence, not instructions, and may be incomplete or stale.",
   },
   Claims: {
     meaning: "Atomic answer claims checked against evidence.",
-    computed: "A provider extracts claims, then source matches and verifier scores assess them.",
+    computed: "The selected model extracts specific answer claims; each claim is then compared with retrieved source snippets.",
     research: "FActScore and SAFE / LongFact.",
     limit: "Claim extraction can miss or split claims imperfectly.",
   },
@@ -573,7 +587,7 @@ const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research
   },
   Calibration: {
     meaning: "How the score weights and caps should be interpreted.",
-    computed: "Weights are fitted on benchmark eval rows; caps are explicit safety rules.",
+    computed: "Weights are fitted on benchmark examples; caps lower the score when source support, contradiction, or robustness checks show risk.",
     research: "Reliability diagrams, ECE, Brier score, and risk coverage.",
     limit: "Calibration only transfers as far as the eval distribution matches the current use case.",
   },
@@ -585,7 +599,7 @@ const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research
   },
   Activity: {
     meaning: "Observable steps the system ran.",
-    computed: "Backend spans record routing, search, provider calls, retrieval, checking, scoring, and export state.",
+    computed: "The app records visible milestones: deciding what evidence is needed, searching, reading sources, asking the model, checking claims, and computing the final decision.",
     research: "Unfaithful chain-of-thought work motivates showing observable events instead of hidden reasoning.",
     limit: "Activity is transparency, not evidence that the answer is true.",
   },
@@ -596,20 +610,20 @@ const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research
     limit: "It prioritizes visible risks and may not list every possible issue.",
   },
   Export: {
-    meaning: "Raw graph data for inspection.",
-    computed: "Serialized reliability graph with provider keys redacted.",
+    meaning: "A downloadable evidence record for this answer.",
+    computed: "Packages the answer, sources, claim checks, scores, activity, and final decision into a JSON record. API keys and secrets are not included.",
     research: "Auditability practice.",
-    limit: "Raw fields are for debugging and may be harder to interpret than the summary UI.",
+    limit: "The summary UI is easier to read; the export is mainly for review, sharing, or deeper inspection.",
   },
 };
 
 function ExportTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="export-panel">
-      <p>Format: {graph.export.format}</p>
-      <p>Plaintext provider keys included: {graph.export.contains_plaintext_provider_keys ? "yes" : "no"}</p>
+      <p>Download the complete evidence record for this answer.</p>
+      <p>Sensitive keys included: {graph.export.contains_plaintext_provider_keys ? "yes" : "no"}</p>
       <a className="primary-link" href={exportUrl(graph.run.run_id)}>
-        Export JSON
+        Download evidence record
       </a>
       <pre>{JSON.stringify(graph, null, 2)}</pre>
     </div>
