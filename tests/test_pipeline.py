@@ -119,6 +119,21 @@ def test_provider_bad_answer_fails_after_retry(monkeypatch):
         raise AssertionError("bad provider answer did not fail")
 
 
+def test_primary_answer_generation_has_enough_token_headroom(monkeypatch):
+    provider = FakeProvider(answer="Retrieval-augmented generation retrieves relevant source text, then uses it as evidence for an answer.")
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    run_pipeline(base_run(question="Explain retrieval-augmented generation."))
+
+    candidate_requests = [
+        request
+        for request in provider.requests
+        if any("candidate answer" in message.content for message in request.messages if message.role == "system")
+    ]
+    assert candidate_requests
+    assert candidate_requests[0].max_tokens >= 900
+
+
 def test_provider_claim_json_failure_fails_run(monkeypatch):
     provider = FakeProvider(claims_raw=["not json", '{"claims":[]}'])
     monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
@@ -212,6 +227,100 @@ def test_attached_source_support_uses_provider_and_entailment_verifier(monkeypat
     assert assessment["verifier"] == "fixture-entailment"
     assert assessment["entailment_score"] >= 0.8
     assert graph["answer"]["citations"]
+
+
+def test_provider_evidence_assessment_accepts_compact_claim_json(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 2, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 2, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_raw=[
+            json.dumps(
+                {
+                    "claim_id": "c1",
+                    "relation": "supported",
+                    "why": "The source states the same release date.",
+                    "source_limit": "Limited to the retrieved snippet.",
+                    "support_score": 0.92,
+                    "evidence_ids": ["e1"],
+                }
+            )
+        ],
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+        chunk_source("ExampleOS 9 was released on April 2, 2026."),
+    )[-1]["graph"]
+
+    assert graph["claim_assessments"][0]["provider_relation"] == "supported"
+    assert any('"claim":{"claim_id":"c1"' in prompt for prompt in provider.user_prompts)
+
+
+def test_provider_evidence_assessment_retries_and_extracts_wrapped_json(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 2, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 2, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_raw=[
+            "not json",
+            (
+                "Here is the JSON:\n"
+                '{"claim_id":"c1","relation":"supported","why":"The snippet gives the same date.",'
+                '"source_limit":"Limited to one snippet.","support_score":0.9,"evidence_ids":["e1"]}'
+            ),
+        ],
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+        chunk_source("ExampleOS 9 was released on April 2, 2026."),
+    )[-1]["graph"]
+
+    assert graph["claim_assessments"][0]["relation"] == "supported"
+    assert len([prompt for prompt in provider.system_prompts if "whether untrusted evidence supports answer claims" in prompt]) == 2
+
+
+def test_provider_evidence_assessment_failure_names_claim(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 2, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 2, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_raw=["not json", "still not json", "{}"],
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    try:
+        run_pipeline(
+            base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+            chunk_source("ExampleOS 9 was released on April 2, 2026."),
+        )
+    except PipelineStageError as exc:
+        assert exc.code == "provider_invalid_evidence_assessment"
+        assert exc.stage == "claim_check"
+        assert "claim c1" in exc.message
+    else:
+        raise AssertionError("invalid provider evidence JSON did not fail")
 
 
 def test_nli_contradiction_overrides_provider_support(monkeypatch):
@@ -423,6 +532,7 @@ class FakeProvider:
         claims=None,
         claims_raw=None,
         assumptions_raw=None,
+        evidence_raw=None,
         evidence_relation="not_found",
         decision=False,
     ):
@@ -437,14 +547,17 @@ class FakeProvider:
         ]
         self.claims_raw = list(claims_raw or [])
         self.assumptions_raw = list(assumptions_raw or [])
+        self.evidence_raw = list(evidence_raw or [])
         self.evidence_relation = evidence_relation
         self.decision = decision
         self.call_count = 0
         self.system_prompts = []
         self.user_prompts = []
+        self.requests = []
 
     async def generate(self, request):
         self.call_count += 1
+        self.requests.append(request)
         system = "\n".join(message.content for message in request.messages if message.role == "system")
         self.system_prompts.extend([message.content for message in request.messages if message.role == "system"])
         self.user_prompts.extend([message.content for message in request.messages if message.role == "user"])
@@ -467,7 +580,7 @@ class FakeProvider:
                 }
             )
         elif "whether untrusted evidence supports answer claims" in system:
-            text = json.dumps(
+            text = self.evidence_raw.pop(0) if self.evidence_raw else json.dumps(
                 {
                     "assessments": [
                         {
