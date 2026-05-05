@@ -312,6 +312,12 @@ export interface ReliabilityGraph {
       summary?: string;
       [key: string]: unknown;
     };
+    score_weights?: {
+      source?: string;
+      trained_at?: string | null;
+      benchmark_scope?: string | null;
+      [key: string]: unknown;
+    };
   };
   perturbation_probe?: PerturbationProbe;
   causal_probe: PerturbationProbe;

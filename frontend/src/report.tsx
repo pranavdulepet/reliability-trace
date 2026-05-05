@@ -258,7 +258,7 @@ function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
       <h3>{graph.calibration.display}</h3>
       <p>{graph.calibration.note}</p>
       <p className="panel-note">
-        The score is a rule-based reliability summary from the signals below. It is not a model confidence percentage or a calibrated probability of truth.
+        The score is a weighted reliability summary from the signals below. It is not a model confidence percentage or a calibrated probability of truth.
       </p>
       <Table
         columns={["Signal", "Value", "Meaning"]}
@@ -457,7 +457,10 @@ function calibrationCopy(graph: ReliabilityGraph): string {
     const labels = graph.calibration.benchmark?.label_count ?? 0;
     return labels > 0 ? `Locally calibrated with ${labels} labeled run${labels === 1 ? "" : "s"}` : "Locally calibrated";
   }
-  return "Not calibrated yet; use the decision and evidence, not the number alone";
+  if (graph.answer.calibration_status === "benchmark_tuned_diagnostic") {
+    return "Benchmark-tuned diagnostic; use the decision and evidence, not the number alone";
+  }
+  return "Research-prior diagnostic; use the decision and evidence, not the number alone";
 }
 
 function scoreBasis(graph: ReliabilityGraph): string {

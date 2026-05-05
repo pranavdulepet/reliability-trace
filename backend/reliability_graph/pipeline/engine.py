@@ -8,7 +8,7 @@ from ..providers import build_provider
 from ..providers.base import GenerateRequest, ModelMessage, ProviderError
 from ..retrieval import compact_snippet, evidence_for_claims, search_chunks, text_similarity, tokenize
 from ..verifier import EntailmentResult, EntailmentVerifier, VerifierUnavailable
-from .scoring import compute_reliability_score
+from .scoring import SCORE_WEIGHT_METADATA, compute_reliability_score
 
 ProviderKeyResolver = Callable[[str], Awaitable[Optional[str]]]
 SECRET_PATTERNS = [
@@ -1449,17 +1449,30 @@ class ReliabilityPipeline:
 
     def _calibration(self) -> Dict[str, Any]:
         if self.calibration_report.get("label_count", 0) <= 0:
+            if SCORE_WEIGHT_METADATA.get("source") == "benchmark_tuned":
+                return {
+                    "status": "benchmark_tuned_diagnostic",
+                    "display": "Benchmark-tuned diagnostic",
+                    "note": (
+                        "Linear score weights were fitted on official-style benchmark evals. "
+                        "This improves ranking, but the score is still not a probability of truth."
+                    ),
+                    "benchmark": self.calibration_report,
+                    "score_weights": SCORE_WEIGHT_METADATA,
+                }
             return {
                 "status": "uncalibrated_diagnostic",
-                "display": "Not locally calibrated yet",
-                "note": self.calibration_report["summary"],
+                "display": "Research-prior diagnostic",
+                "note": "Using built-in research-prior weights. Add labels or benchmark-tuned weights before making calibration claims.",
                 "benchmark": self.calibration_report,
+                "score_weights": SCORE_WEIGHT_METADATA,
             }
         return {
             "status": "local_calibration",
             "display": "Locally calibrated",
             "note": self.calibration_report["summary"],
             "benchmark": self.calibration_report,
+            "score_weights": SCORE_WEIGHT_METADATA,
         }
 
     async def _perturbation_probe(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> Dict[str, Any]:
@@ -2143,9 +2156,9 @@ class ReliabilityPipeline:
             },
             {
                 "signal": "Calibration",
-                "method": "calibration",
+                "method": "benchmark_weight_tuning_and_local_label_calibration",
                 "research_lineage": "Reliability diagrams and expected calibration error",
-                "limitation": "Scores remain diagnostic until enough local labels exist.",
+                "limitation": "Benchmark-tuned weights improve ranking, but scores are still diagnostic unless validated on the target data distribution.",
             },
             {
                 "signal": "Observable activity",
