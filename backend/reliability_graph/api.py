@@ -179,6 +179,13 @@ def get_conversation(conversation_id: str):
         raise HTTPException(status_code=404, detail="conversation not found") from exc
 
 
+@app.delete("/api/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str):
+    if not storage.delete_conversation(settings.user_id, conversation_id):
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"deleted": True}
+
+
 @app.post("/api/conversations/{conversation_id}/messages", status_code=201)
 def create_conversation_message(conversation_id: str, payload: ConversationMessageCreate):
     try:

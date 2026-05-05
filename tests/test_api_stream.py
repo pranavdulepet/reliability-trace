@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 import backend.reliability_graph.api as api_module
@@ -205,6 +206,46 @@ def test_create_message_rejects_unready_verifier_without_saving_user_message(tmp
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "verifier_not_ready"
     assert storage.get_conversation(api_module.settings.user_id, conversation["conversation_id"])["messages"] == []
+
+
+def test_delete_conversation_endpoint_removes_chat_messages_and_runs(tmp_path, monkeypatch):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    monkeypatch.setattr(api_module, "storage", storage)
+    conversation = storage.create_conversation(api_module.settings.user_id, "Delete me")
+    user_message = storage.add_message(
+        api_module.settings.user_id,
+        conversation["conversation_id"],
+        "user",
+        "Please answer this.",
+    )
+    run = storage.create_run(
+        api_module.settings.user_id,
+        RunCreate(
+            question="Please answer this.",
+            provider="openai",
+            conversation_id=conversation["conversation_id"],
+            user_message_id=user_message["message_id"],
+            use_live_provider=True,
+        ),
+    )
+    storage.add_message(
+        api_module.settings.user_id,
+        conversation["conversation_id"],
+        "assistant",
+        "Answer.",
+        run_id=run["run_id"],
+    )
+
+    with TestClient(api_module.app) as client:
+        response = client.delete(f"/api/conversations/{conversation['conversation_id']}")
+        missing = client.get(f"/api/conversations/{conversation['conversation_id']}")
+
+    assert response.status_code == 200
+    assert response.json() == {"deleted": True}
+    assert missing.status_code == 404
+    with pytest.raises(KeyError):
+        storage.get_run(api_module.settings.user_id, run["run_id"])
 
 
 class FakeProvider:

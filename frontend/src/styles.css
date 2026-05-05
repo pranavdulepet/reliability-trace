@@ -1,7 +1,7 @@
 :root {
   --rail-width: 280px;
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-sans: "Courier New", Courier, monospace;
+  --font-mono: "Courier New", Courier, monospace;
   --bg: #fbfbfa;
   --surface: #ffffff;
   --surface-soft: #f5f6f4;
@@ -166,11 +166,43 @@ a:focus-visible {
 }
 
 .conversation-list {
+  align-content: start;
   display: grid;
   gap: 5px;
   min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
+}
+
+.conversation-search {
+  display: grid;
+  gap: 5px;
+}
+
+.conversation-search span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.conversation-search input {
+  background: var(--surface);
+  min-height: 38px;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.conversation-row {
+  align-items: stretch;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+}
+
+.conversation-row.active {
+  background: #ffffff;
+  border-color: var(--line);
 }
 
 .conversation-item,
@@ -185,10 +217,13 @@ a:focus-visible {
   text-align: left;
 }
 
-.conversation-item.active,
 .rail-link.active {
   background: #ffffff;
   border-color: var(--line);
+}
+
+.conversation-row.active .conversation-item {
+  background: transparent;
 }
 
 .conversation-item span {
@@ -208,6 +243,23 @@ a:focus-visible {
 .conversation-item small {
   color: var(--muted);
   font-size: 0.72rem;
+}
+
+.conversation-delete {
+  align-self: center;
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--muted);
+  font-size: 0.72rem;
+  margin-right: 4px;
+  min-height: 32px;
+  padding: 6px 7px;
+}
+
+.conversation-delete:hover {
+  background: #fff6f4;
+  border-color: #f0c7c1;
+  color: var(--red);
 }
 
 .rail-note {
@@ -583,7 +635,6 @@ a:focus-visible {
 .attachment-button,
 .text-link,
 .quiet-button,
-.url-adder button,
 .search-state {
   background: var(--surface);
   color: var(--text);
@@ -594,7 +645,6 @@ a:focus-visible {
 .attachment-button:hover,
 .text-link:hover,
 .quiet-button:hover,
-.url-adder button:not(:disabled):hover,
 .search-state:hover,
 .conversation-item:hover,
 .rail-link:hover {
@@ -643,13 +693,6 @@ a:focus-visible {
   display: none;
 }
 
-.url-adder {
-  display: flex;
-  gap: 6px;
-  min-width: 260px;
-}
-
-.url-adder input,
 .inline-form input,
 .inline-form select,
 .preference-form input,
@@ -1574,8 +1617,17 @@ th {
     width: auto;
   }
 
+  .conversation-search {
+    grid-column: 1 / -1;
+  }
+
   .conversation-list {
-    display: none;
+    display: grid;
+    grid-auto-columns: minmax(190px, 72vw);
+    grid-column: 1 / -1;
+    max-height: 72px;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .rail-footer {
@@ -1600,10 +1652,6 @@ th {
     align-items: stretch;
     display: grid;
     grid-template-columns: 1fr;
-  }
-
-  .url-adder {
-    min-width: 0;
   }
 
   .composer-status {

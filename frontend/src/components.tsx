@@ -1,4 +1,4 @@
-import { Dispatch, FormEvent, SetStateAction, useEffect, useRef, useState } from "react";
+import { Dispatch, FormEvent, SetStateAction, useEffect, useMemo, useRef, useState } from "react";
 import type { DraftAttachment } from "./App";
 import type {
   ConversationSummary,
@@ -16,6 +16,7 @@ interface ConversationListProps {
   view: string;
   onNewChat: () => void;
   onSelectConversation: (conversationId: string) => void;
+  onDeleteConversation: (conversationId: string) => void;
   onOpenAbout: () => void;
   onOpenSettings: () => void;
 }
@@ -26,10 +27,17 @@ export function ConversationList({
   view,
   onNewChat,
   onSelectConversation,
+  onDeleteConversation,
   onOpenAbout,
   onOpenSettings,
 }: ConversationListProps) {
-  const visibleConversations = conversations.slice(0, 50);
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredConversations = useMemo(() => {
+    if (!normalizedQuery) return conversations;
+    return conversations.filter((conversation) => conversation.title.toLowerCase().includes(normalizedQuery));
+  }, [conversations, normalizedQuery]);
+  const visibleConversations = filteredConversations.slice(0, 80);
   return (
     <aside className="conversation-rail">
       <div className="brand-block">
@@ -39,23 +47,48 @@ export function ConversationList({
       <button className="new-chat-button" type="button" onClick={onNewChat}>
         New chat
       </button>
+      <label className="conversation-search">
+        <span>Search chats</span>
+        <input
+          aria-label="Search chats"
+          autoComplete="off"
+          placeholder="Search chats"
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
       <nav className="conversation-list" aria-label="Conversations">
         {conversations.length === 0 ? (
           <p className="empty">No conversations yet.</p>
+        ) : visibleConversations.length === 0 ? (
+          <p className="empty">No matching chats.</p>
         ) : (
           visibleConversations.map((conversation) => (
-            <button
-              className={conversation.conversation_id === activeConversationId && view === "chat" ? "conversation-item active" : "conversation-item"}
+            <div
+              className={conversation.conversation_id === activeConversationId && view === "chat" ? "conversation-row active" : "conversation-row"}
               key={conversation.conversation_id}
-              type="button"
-              onClick={() => onSelectConversation(conversation.conversation_id)}
             >
-              <span>{conversation.title}</span>
-              <small>{conversation.message_count} messages</small>
-            </button>
+              <button
+                className="conversation-item"
+                type="button"
+                onClick={() => onSelectConversation(conversation.conversation_id)}
+              >
+                <span>{conversation.title}</span>
+                <small>{conversation.message_count} messages</small>
+              </button>
+              <button
+                aria-label={`Delete ${conversation.title}`}
+                className="conversation-delete"
+                type="button"
+                onClick={() => onDeleteConversation(conversation.conversation_id)}
+              >
+                Delete
+              </button>
+            </div>
           ))
         )}
-        {conversations.length > visibleConversations.length && (
+        {filteredConversations.length > visibleConversations.length && (
           <p className="rail-note">Showing latest {visibleConversations.length} chats.</p>
         )}
       </nav>
@@ -83,7 +116,6 @@ interface ChatComposerProps {
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
-  onAddUrl: (url: string) => void;
   onRemoveAttachment: (id: string) => void;
   onOpenSettings: () => void;
 }
@@ -100,14 +132,11 @@ export function ChatComposer({
   onChange,
   onSubmit,
   onAddFiles,
-  onAddUrl,
   onRemoveAttachment,
   onOpenSettings,
 }: ChatComposerProps) {
-  const [urlDraft, setUrlDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const disabled = busy || value.trim().length < 3 || !providerReady || !verifierReady;
-  const canAddUrl = !busy && urlDraft.trim().length > 0;
 
   useEffect(() => {
     const textarea = textareaRef.current;
@@ -128,7 +157,7 @@ export function ChatComposer({
               type="button"
               onClick={() => onRemoveAttachment(attachment.id)}
             >
-              <span>{attachment.kind === "file" ? "File" : "URL"}</span>
+              <span>{attachment.kind === "file" ? "File" : "Link"}</span>
               {attachment.title}
             </button>
           ))}
@@ -138,7 +167,7 @@ export function ChatComposer({
         ref={textareaRef}
         aria-label="Message"
         value={value}
-        placeholder="Ask a question..."
+        placeholder="Ask a question or paste a link..."
         rows={1}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
@@ -164,32 +193,6 @@ export function ChatComposer({
             }}
           />
         </label>
-        <div className="url-adder">
-          <input
-            aria-label="Attachment URL"
-            disabled={busy}
-            value={urlDraft}
-            placeholder="Add URL"
-            onChange={(event) => setUrlDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              if (!canAddUrl) return;
-              onAddUrl(urlDraft);
-              setUrlDraft("");
-            }}
-          />
-          <button
-            disabled={!canAddUrl}
-            type="button"
-            onClick={() => {
-              onAddUrl(urlDraft);
-              setUrlDraft("");
-            }}
-          >
-            Add
-          </button>
-        </div>
         <span className={searchAvailable ? "search-state ready" : "search-state missing"} title="Web evidence is gathered automatically when a search key is available.">
           {searchAvailable ? "Web evidence on" : "Web evidence unavailable"}
         </span>

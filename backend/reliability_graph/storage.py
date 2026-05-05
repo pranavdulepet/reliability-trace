@@ -434,6 +434,37 @@ class Storage:
         conversation["messages"] = self.list_messages(user_id, conversation_id)
         return conversation
 
+    def delete_conversation(self, user_id: str, conversation_id: str) -> bool:
+        with self._connect() as con:
+            run_rows = con.execute(
+                """
+                select run_id
+                from runs
+                where user_id = ? and conversation_id = ?
+                """,
+                (user_id, conversation_id),
+            ).fetchall()
+            run_ids = [str(row["run_id"]) for row in run_rows]
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                con.execute(
+                    f"delete from labels where user_id = ? and run_id in ({placeholders})",
+                    [user_id, *run_ids],
+                )
+            con.execute(
+                "delete from messages where user_id = ? and conversation_id = ?",
+                (user_id, conversation_id),
+            )
+            con.execute(
+                "delete from runs where user_id = ? and conversation_id = ?",
+                (user_id, conversation_id),
+            )
+            cursor = con.execute(
+                "delete from conversations where user_id = ? and conversation_id = ?",
+                (user_id, conversation_id),
+            )
+        return cursor.rowcount > 0
+
     def add_message(
         self,
         user_id: str,

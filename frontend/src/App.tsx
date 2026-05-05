@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createConversation,
+  deleteConversation,
   deleteKey,
   deleteSearchKey,
   fetchSourceUrl,
@@ -236,52 +237,39 @@ function App() {
     setAttachments((current) => [...current, ...additions]);
   }
 
-  function handleAddUrl(url: string) {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    setError(null);
-    if (attachments.length >= MAX_ATTACHMENTS) {
-      setError(`Use at most ${MAX_ATTACHMENTS} attachments per message.`);
-      return;
-    }
-    if (trimmed.length > MAX_URL_LENGTH) {
-      setError("URL is too long.");
-      return;
-    }
-    try {
-      const parsed = new URL(trimmed);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        setError("Only http and https URLs can be attached.");
-        return;
-      }
-      if (parsed.username || parsed.password) {
-        setError("URLs with credentials cannot be attached.");
-        return;
-      }
-    } catch {
-      setError("Enter a valid URL.");
-      return;
-    }
-    setAttachments((current) => [
-      ...current,
-      {
-        id: makeId("url"),
-        kind: "url",
-        title: trimmed.replace(/^https?:\/\//, "").slice(0, 80),
-        url: trimmed,
-        status: "ready",
-      },
-    ]);
-  }
-
   function removeAttachment(id: string) {
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  }
+
+  async function handleDeleteConversation(conversationId: string) {
+    if (busy && conversationId === activeConversationId) {
+      setError("Wait for the current answer to finish before deleting this chat.");
+      return;
+    }
+    const target = conversations.find((item) => item.conversation_id === conversationId);
+    const title = target?.title || "this chat";
+    if (!window.confirm(`Delete "${title}"?`)) return;
+    setError(null);
+    try {
+      await deleteConversation(conversationId);
+      if (activeConversationId === conversationId) {
+        clearActiveConversation();
+      }
+      await refreshWorkspace();
+    } catch (err) {
+      showError(err);
+    }
   }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
     if (!content || busy || !chatReady || submitLockRef.current) return;
+    const pastedUrlAttachments = extractUrlAttachments(content, attachments);
+    if (attachments.length + pastedUrlAttachments.length > MAX_ATTACHMENTS) {
+      setError(`Use at most ${MAX_ATTACHMENTS} files or links per message.`);
+      return;
+    }
 
     submitLockRef.current = true;
     setBusy(true);
@@ -294,7 +282,7 @@ function App() {
       if (!activeConversationId) {
         setActiveConversationId(conversationId);
       }
-      const documentIds = await materializeAttachments();
+      const documentIds = await materializeAttachments(pastedUrlAttachments);
       const response = await sendConversationMessage(conversationId, {
         content,
         attachment_document_ids: documentIds,
@@ -313,9 +301,13 @@ function App() {
     }
   }
 
-  async function materializeAttachments(): Promise<string[]> {
+  async function materializeAttachments(pastedUrlAttachments: DraftAttachment[]): Promise<string[]> {
     const documentIds: string[] = [];
-    for (const attachment of attachments) {
+    const workItems = [...attachments, ...pastedUrlAttachments];
+    if (pastedUrlAttachments.length > 0) {
+      setAttachments((current) => [...current, ...pastedUrlAttachments]);
+    }
+    for (const attachment of workItems) {
       setAttachments((current) => current.map((item) => (item.id === attachment.id ? { ...item, status: "uploading" } : item)));
       try {
         const document =
@@ -407,6 +399,7 @@ function App() {
         view={view}
         onNewChat={() => void handleNewChat()}
         onSelectConversation={(id) => void handleSelectConversation(id)}
+        onDeleteConversation={(id) => void handleDeleteConversation(id)}
         onOpenAbout={() => setView("about")}
         onOpenSettings={() => setView("settings")}
       />
@@ -459,7 +452,6 @@ function App() {
             setDraft={handleDraftChange}
             onSubmit={handleSubmit}
             onAddFiles={handleAddFiles}
-            onAddUrl={handleAddUrl}
             onRemoveAttachment={removeAttachment}
             onOpenSettings={() => setView("settings")}
           />
@@ -492,7 +484,6 @@ function ChatView({
   setDraft,
   onSubmit,
   onAddFiles,
-  onAddUrl,
   onRemoveAttachment,
   onOpenSettings,
 }: {
@@ -513,7 +504,6 @@ function ChatView({
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
-  onAddUrl: (url: string) => void;
   onRemoveAttachment: (id: string) => void;
   onOpenSettings: () => void;
 }) {
@@ -542,7 +532,7 @@ function ChatView({
         {messages.length === 0 && !hasPendingAssistant ? (
           <div className="empty-chat">
             <h1>Ask anything. See why the answer is trustworthy.</h1>
-            <p>Attach files or URLs when the answer should be grounded in specific material.</p>
+            <p>Attach files or paste links in the message when the answer should be grounded in specific material.</p>
             {!searchAvailable && (
               <p className="search-warning">Web evidence is unavailable until a search key is added in Settings. Current factual answers will be less reliable.</p>
             )}
@@ -566,7 +556,6 @@ function ChatView({
         onChange={setDraft}
         onSubmit={onSubmit}
         onAddFiles={onAddFiles}
-        onAddUrl={onAddUrl}
         onRemoveAttachment={onRemoveAttachment}
         onOpenSettings={onOpenSettings}
       />
@@ -777,6 +766,46 @@ function isProviderConnected(provider: ProviderMetadata): boolean {
 
 function makeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}`;
+}
+
+function extractUrlAttachments(content: string, existingAttachments: DraftAttachment[]): DraftAttachment[] {
+  const existingUrls = new Set(existingAttachments.map((attachment) => normalizeUrl(attachment.url ?? "")).filter(Boolean));
+  const urls: string[] = [];
+  for (const match of content.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+    const normalized = normalizeUrl(match[0].replace(/[),.;!?]+$/g, ""));
+    if (!normalized || existingUrls.has(normalized) || urls.includes(normalized)) continue;
+    urls.push(normalized);
+  }
+  return urls.map((url) => ({
+    id: makeId("url"),
+    kind: "url" as const,
+    title: urlTitle(url),
+    url,
+    status: "ready" as const,
+  }));
+}
+
+function normalizeUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > MAX_URL_LENGTH) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    if (parsed.username || parsed.password) return null;
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function urlTitle(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.hostname}${parsed.pathname === "/" ? "" : parsed.pathname}`.slice(0, 80);
+  } catch {
+    return url.replace(/^https?:\/\//, "").slice(0, 80);
+  }
 }
 
 function streamErrorMessage(event: Event): string {

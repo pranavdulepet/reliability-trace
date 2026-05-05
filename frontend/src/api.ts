@@ -141,6 +141,12 @@ export async function getConversation(conversationId: string): Promise<Conversat
   return request<ConversationView>(`/api/conversations/${conversationId}`);
 }
 
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await request<{ deleted: boolean }>(`/api/conversations/${conversationId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function sendConversationMessage(
   conversationId: string,
   payload: {
