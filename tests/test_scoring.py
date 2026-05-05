@@ -82,6 +82,34 @@ def test_score_caps_partial_source_support_below_rely_threshold():
     assert any("partial source support" in cap for cap in caps)
 
 
+def test_score_caps_low_provenance_partial_support_as_not_reliable():
+    features = perfect_features()
+    features["source_quality_score"] = 0.25
+    features["retrieval_alignment_score"] = 0.7
+    features["retrieval_peak_score"] = 0.7
+
+    score, caps = compute_reliability_score(
+        features,
+        {"evidence_required": True, "partial_support_claims": 1},
+    )
+
+    assert score == 50
+    assert any("partial support from low-provenance sources" in cap for cap in caps)
+
+
+def test_score_caps_uncorroborated_partial_support_as_not_reliable():
+    features = perfect_features()
+    features["sample_overlap_stability"] = 0.5
+
+    score, caps = compute_reliability_score(
+        features,
+        {"evidence_required": True, "partial_support_claims": 1},
+    )
+
+    assert score == 50
+    assert any("partial source support without sample corroboration" in cap for cap in caps)
+
+
 def test_score_caps_candidate_answer_conflicts():
     features = perfect_features()
     features["sample_conflict_rate"] = 1.0

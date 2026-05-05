@@ -6,13 +6,17 @@ Base URL: `http://localhost:8000`
 
 `GET /health`
 
-Returns service status, database path, and backend version.
+Returns service status, database path, backend version, and verifier readiness.
 
 ## Providers
 
 `GET /api/providers`
 
 Returns supported provider metadata and whether each provider has a saved active key.
+
+`GET /api/verifier`
+
+Returns local NLI verifier readiness. Chat runs require `"ready": true`.
 
 `GET /api/provider-preferences`
 

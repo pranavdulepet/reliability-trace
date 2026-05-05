@@ -14,6 +14,8 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 
 - No provider key is ever exposed to frontend code.
 - Saved keys are encrypted in backend storage and displayed only as fingerprints.
+- Production chat is provider-strict: never substitute local synthetic answers, fallback claim extraction, or heuristic claim/source judgments when provider or verifier work fails.
+- A ready local NLI entailment verifier is required for chat runs. Eval-only fixed-answer paths may use fixtures; user chat may not.
 - The reliability score is a diagnostic score, not a calibrated probability.
 - Do not count trace completeness, hard-coded rubric values, or fake decision utilities as truth evidence.
 - Closed-model behavior is observable evidence only.

@@ -7,6 +7,7 @@ Use Python 3.14. The repo includes `.python-version` so version managers can sel
 ```bash
 cp .env.example .env
 python -m pip install -e ".[dev]"
+python scripts/setup_nli_verifier.py
 python -m uvicorn backend.reliability_graph.api:app --reload --port 8000
 cd frontend
 npm install
@@ -40,6 +41,16 @@ TINKER_API_KEY=
 
 Use Settings to choose a default provider when more than one key is connected. Provider-specific environment variables are read only by the backend.
 
+## Entailment Verifier
+
+Chat runs require the local NLI verifier. If Settings says setup is required, run:
+
+```bash
+python scripts/setup_nli_verifier.py
+```
+
+Restart the backend after the download. The verifier files are stored under `data/models/`, which is ignored by git.
+
 ## Chat Attachments
 
 Attach local text files or URLs from the chat composer. The backend chunks each attachment and builds local retrieval vectors. The answer audit retrieves only from attachments on the triggering message.
@@ -53,4 +64,4 @@ python -m pytest
 cd frontend && npm run build
 ```
 
-For end-to-end product checks, connect at least one provider key in Settings and run a Chat audit. Keep provider keys in the encrypted vault or environment variables; never commit them.
+For end-to-end product checks, connect at least one provider key in Settings, confirm the entailment verifier is ready, and run a Chat audit. Keep provider keys in the encrypted vault or environment variables; never commit them.

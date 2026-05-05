@@ -6,8 +6,8 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 
 | Signal | Status | What It Means | Main Limitation |
 | --- | --- | --- | --- |
-| `atomic_claim_support` | Strongest current signal | Inspired by FActScore and SAFE / LongFact. The pipeline decomposes the answer into checkable claims, retrieves attached/fetched/web source chunks, applies deterministic entailment checks for simple support/number/date/polarity conflicts, and can use a provider-backed structured evidence classifier when a live provider is available. | This is still not proof of truth. Deterministic checks miss paraphrase and context; provider-backed assessment can be wrong and must be benchmarked against labeled data. |
-| `source_quality_score` | Useful diagnostic | Separates higher-provenance source matches from weak snippets before the score can rise. | Source quality is heuristic; it needs benchmark calibration and better domain/source reputation models. |
+| `atomic_claim_support` | Strongest current signal | Inspired by FActScore and SAFE / LongFact. Production chat uses provider-backed structured claim extraction and evidence assessment, then gates claim/source relations through a required NLI entailment verifier. | This is still not proof of truth. Provider extraction and NLI can be wrong, miss context, or over-trust weak sources; results must be benchmarked against labeled data. |
+| `source_quality_score` | Useful diagnostic | Separates higher-provenance source matches from weak snippets before the score can rise. | Source quality uses source metadata; it needs benchmark calibration and better domain/source reputation models. |
 | `sample_consistency` | Directional signal | Inspired by SelfCheckGPT. Multiple samples are compared for answer stability. | Models can agree on the same false claim, so agreement cannot replace external evidence for factual/current answers. |
 | `semantic_entropy` | Directional signal | Inspired by semantic entropy work. The system tracks answer-meaning disagreement instead of treating every wording difference as important. | Current clustering is a lightweight approximation, not a full entailment-based semantic entropy implementation. |
 | `sample_conflict_rate` | Useful guardrail | Candidate answers are checked for obvious numeric changes and recommendation-polarity flips before they can be treated as stable. | This catches simple conflicts only; it is not a general contradiction detector or substitute for source evidence. |
@@ -17,11 +17,12 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 
 ## Removed Or Demoted
 
-- Hard-coded rubric dimensions are no longer score inputs. The pipeline now exposes deterministic signal summaries only when useful for inspection.
+- Hard-coded rubric dimensions are no longer score inputs. The pipeline exposes computed signal summaries only when useful for inspection.
 - Fake decision utilities and criterion weights were removed. Decision analysis now shows qualitative options, evidence status, basis, and risk.
 - Trace completeness is no longer a score feature. It is useful for debugging and transparency, not factual reliability.
 - A single high-scoring retrieved chunk no longer dominates the score. Claim support, retrieval alignment, source quality, and sample consistency share the score.
 - Missing sources are handled differently by question type: they block current, high-stakes, and source-required factual answers, but only mark general explanations as not source-grounded.
+- Production chat no longer substitutes local synthetic answers, fallback claim extraction, or heuristic claim/source relations when provider or verifier work fails. Eval-only fixed-answer runs still use controlled fixtures so benchmark scoring can run offline.
 
 ## Benchmark Direction
 

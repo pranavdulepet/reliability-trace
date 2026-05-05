@@ -18,7 +18,7 @@ from backend.reliability_graph.evals import (
     stable_split_bucket,
     summarize_eval_results,
 )
-from scripts.run_reliability_evals import _append_result, _read_results
+from scripts.run_reliability_evals import _append_result, _internal_regressions, _read_results
 
 
 def test_eval_metric_math_on_tiny_fixture():
@@ -220,3 +220,53 @@ def test_baseline_report_preserves_relation_recall_metric():
     }
 
     assert baseline_report([result])["full_score"]["claim_relation_recall_on_bad"] == 1.0
+
+
+def test_regression_gate_compares_baselines_on_same_rows():
+    results = [
+        _gate_result("selfcheck", "bad", risk=0.9, baseline_risk=0.8, bad=True),
+        _gate_result("selfcheck", "good", risk=0.1, baseline_risk=0.2, bad=False),
+        {
+            "benchmark": "simpleqa",
+            "example_id": "all-correct",
+            "features": {"claim_support_rate": 0.0, "semantic_stability": 1.0},
+            "metrics": {
+                "score": 0.4,
+                "risk_score": 0.6,
+                "correctness": 1.0,
+                "bad_answer": False,
+                "false_safe": False,
+            },
+        },
+    ]
+
+    assert _internal_regressions(results) == []
+
+
+def test_regression_gate_flags_same_row_baseline_win():
+    results = [
+        _gate_result("selfcheck", "bad-low-risk", risk=0.2, baseline_risk=0.9, bad=True),
+        _gate_result("selfcheck", "bad-high-risk", risk=0.7, baseline_risk=0.8, bad=True),
+        _gate_result("selfcheck", "good", risk=0.3, baseline_risk=0.1, bad=False),
+    ]
+
+    regressions = _internal_regressions(results)
+
+    assert regressions
+    assert any("beat full score" in item for item in regressions)
+
+
+def _gate_result(benchmark: str, example_id: str, risk: float, baseline_risk: float, bad: bool) -> dict:
+    return {
+        "benchmark": benchmark,
+        "example_id": example_id,
+        "features": {"claim_support_rate": 1.0 - risk, "semantic_stability": 1.0 - risk},
+        "metrics": {
+            "score": 1.0 - risk,
+            "risk_score": risk,
+            "correctness": 0.0 if bad else 1.0,
+            "bad_answer": bad,
+            "false_safe": bad and risk <= 0.25,
+            "selfcheck_ngram_risk": baseline_risk,
+        },
+    }

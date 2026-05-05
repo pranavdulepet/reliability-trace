@@ -16,6 +16,9 @@ from backend.reliability_graph.evals import (
     EvalExample,
     MODES,
     OFFICIAL_SOURCES,
+    auroc,
+    average_precision,
+    baseline_risk_score,
     filter_examples_for_mode,
     load_benchmark_examples,
     redact_value,
@@ -105,8 +108,11 @@ async def main_async() -> int:
     print("summary: %s" % paths["summary"])
     print("report: %s" % paths["report"])
     print("manifest: %s" % str(output_dir / "manifest.json"))
-    if args.fail_on_regression and _has_internal_regression(summary):
-        print("regression gate failed: full score did not beat internal baselines")
+    regressions = _internal_regressions(results) if args.fail_on_regression else []
+    if regressions:
+        print("regression gate failed:")
+        for regression in regressions:
+            print("- %s" % regression)
         return 2
     return 0
 
@@ -237,19 +243,93 @@ def _filter_baselines(summary: dict, requested) -> None:
     summary["baselines"] = {name: baselines[name] for name in requested if name in baselines}
 
 
-def _has_internal_regression(summary: dict) -> bool:
-    baselines = summary.get("baselines") or {}
-    full = baselines.get("full_score") or {}
-    full_auroc = full.get("auroc")
-    if full_auroc is None:
-        return False
-    for name, metrics in baselines.items():
-        if name in {"full_score", "random_prior"}:
+def _internal_regressions(results: list) -> list[str]:
+    regressions = []
+    for baseline_name in [
+        "claim_support_only",
+        "retrieval_lexical",
+        "sample_consistency_only",
+        "selfcheck_ngram",
+    ]:
+        comparison = _paired_baseline_comparison(results, baseline_name)
+        if not comparison:
             continue
-        auroc = metrics.get("auroc")
-        if auroc is not None and auroc > full_auroc:
-            return True
-    return False
+        if _metric_beats(comparison["baseline_auroc"], comparison["full_auroc"]):
+            regressions.append(
+                "%s AUROC %.4f beat full score AUROC %.4f on the same %d rows"
+                % (
+                    baseline_name,
+                    comparison["baseline_auroc"],
+                    comparison["full_auroc"],
+                    comparison["count"],
+                )
+            )
+        if _metric_beats(comparison["baseline_auprc"], comparison["full_auprc"]):
+            regressions.append(
+                "%s AUPRC %.4f beat full score AUPRC %.4f on the same %d rows"
+                % (
+                    baseline_name,
+                    comparison["baseline_auprc"],
+                    comparison["full_auprc"],
+                    comparison["count"],
+                )
+            )
+        if comparison["full_false_safe"] > comparison["baseline_false_safe"] + 0.02:
+            regressions.append(
+                "full score false-safe %.4f exceeded %s false-safe %.4f on the same %d bad rows"
+                % (
+                    comparison["full_false_safe"],
+                    baseline_name,
+                    comparison["baseline_false_safe"],
+                    comparison["bad_count"],
+                )
+            )
+    return regressions
+
+
+def _paired_baseline_comparison(results: list, baseline_name: str) -> Optional[dict]:
+    labels = []
+    full_risks = []
+    baseline_risks = []
+    full_false_safe = []
+    baseline_false_safe = []
+    for result in results:
+        metrics = result.get("metrics") or {}
+        correctness = metrics.get("correctness")
+        full_risk = baseline_risk_score(result, "full_score")
+        baseline_risk = baseline_risk_score(result, baseline_name)
+        if correctness is None or full_risk is None or baseline_risk is None:
+            continue
+        bad_answer = bool(metrics.get("bad_answer"))
+        labels.append(1 if bad_answer else 0)
+        full_risks.append(float(full_risk))
+        baseline_risks.append(float(baseline_risk))
+        if bad_answer:
+            full_false_safe.append(1.0 if float(full_risk) <= 0.25 else 0.0)
+            baseline_false_safe.append(1.0 if float(baseline_risk) <= 0.25 else 0.0)
+    if len(labels) < 2 or len(set(labels)) < 2:
+        return None
+    return {
+        "baseline": baseline_name,
+        "count": len(labels),
+        "bad_count": sum(labels),
+        "full_auroc": auroc(labels, full_risks),
+        "baseline_auroc": auroc(labels, baseline_risks),
+        "full_auprc": average_precision(labels, full_risks),
+        "baseline_auprc": average_precision(labels, baseline_risks),
+        "full_false_safe": _mean(full_false_safe),
+        "baseline_false_safe": _mean(baseline_false_safe),
+    }
+
+
+def _metric_beats(left: Optional[float], right: Optional[float]) -> bool:
+    return left is not None and right is not None and left > right + 1e-9
+
+
+def _mean(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / float(len(values))
 
 
 def _stored_key_resolver():

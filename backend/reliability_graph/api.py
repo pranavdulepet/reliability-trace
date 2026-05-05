@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .benchmarks import build_benchmark_report
 from .config import ENV_KEY_BY_PROVIDER, ENV_KEY_BY_SEARCH_PROVIDER, settings
-from .pipeline import ReliabilityPipeline
+from .pipeline import PipelineStageError, ReliabilityPipeline
 from .providers import list_provider_metadata
 from .retrieval import build_chunks, fetch_url_text, search_chunks
 from .schemas import (
@@ -28,6 +28,7 @@ from .schemas import (
 )
 from .secrets import KeyVault
 from .storage import Storage
+from .verifier import build_entailment_verifier
 from .web_search import choose_research_route, route_to_dict, search_tavily
 
 app = FastAPI(title="ReliabilityGraph", version="0.1.0")
@@ -42,6 +43,7 @@ app.add_middleware(
 
 storage = Storage(settings.db_path)
 vault = KeyVault(settings.db_path.parent, settings.secret)
+entailment_verifier = build_entailment_verifier()
 
 
 @app.on_event("startup")
@@ -52,11 +54,13 @@ def startup() -> None:
 @app.get("/health")
 def health():
     storage.init_db()
+    verifier = entailment_verifier.status()
     return {
-        "status": "ok",
+        "status": "ok" if verifier["ready"] else "setup_required",
         "version": "0.1.0",
         "db_path": str(settings.db_path),
         "user_scope": settings.user_id,
+        "verifier": verifier,
     }
 
 
@@ -65,6 +69,11 @@ def providers():
     saved = [row["provider"] for row in storage.list_provider_keys(settings.user_id)]
     env_keys = [provider for provider, env_var in ENV_KEY_BY_PROVIDER.items() if os.getenv(env_var)]
     return {"providers": list_provider_metadata(saved, env_keys)}
+
+
+@app.get("/api/verifier")
+def verifier_status():
+    return entailment_verifier.status()
 
 
 @app.get("/api/provider-preferences")
@@ -143,6 +152,7 @@ def delete_key(provider: str):
 def create_run(payload: RunCreate):
     storage.init_db()
     payload = _run_with_provider_defaults(payload)
+    _require_verifier_ready()
     return storage.create_run(settings.user_id, payload)
 
 
@@ -177,6 +187,8 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
         raise HTTPException(status_code=404, detail="conversation not found") from exc
 
     attachment_document_ids = _validate_attachment_document_ids(payload.attachment_document_ids)
+    _resolve_provider_defaults(payload.provider)
+    _require_verifier_ready()
     prior_context = [
         {"role": message["role"], "content": message["content"][:1800]}
         for message in conversation["messages"][-10:]
@@ -350,6 +362,7 @@ async def stream_run_events(run_id: str):
         pipeline = ReliabilityPipeline(
             retrieval_chunks=storage.list_document_chunks(settings.user_id, retrieval_document_ids),
             calibration_report=build_benchmark_report(storage.list_labeled_runs(settings.user_id)),
+            entailment_verifier=entailment_verifier,
         )
         trace = list(pre_trace)
         try:
@@ -369,10 +382,14 @@ async def stream_run_events(run_id: str):
                             run_id=run_id,
                         )
                 yield _sse(event)
+        except PipelineStageError as exc:
+            message = _sanitize_error(exc.message)
+            storage.fail_run(settings.user_id, run_id, message, trace)
+            yield _sse({**exc.to_event(), "message": message})
         except Exception as exc:
             message = _sanitize_error(str(exc))
             storage.fail_run(settings.user_id, run_id, message, trace)
-            yield _sse({"type": "error", "message": message})
+            yield _sse({"type": "error", "code": "unexpected_error", "stage": "runtime", "retryable": True, "message": message})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -588,6 +605,20 @@ def _run_with_provider_defaults(payload: RunCreate) -> RunCreate:
             "use_live_provider": True,
         }
     )
+
+
+def _require_verifier_ready() -> None:
+    status = entailment_verifier.status()
+    if not status.get("ready"):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "verifier_not_ready",
+                "stage": "setup",
+                "retryable": False,
+                "message": status.get("message") or "The entailment verifier is not ready.",
+            },
+        )
 
 
 def _validate_attachment_document_ids(document_ids):

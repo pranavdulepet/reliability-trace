@@ -2,11 +2,11 @@ from typing import Any, Dict, List, Tuple
 
 
 EVIDENCE_REQUIRED_WEIGHTS = {
-    "claim_support_rate": 0.32,
-    "retrieval_alignment_score": 0.24,
-    "source_quality_score": 0.16,
-    "sample_overlap_stability": 0.10,
-    "semantic_stability": 0.10,
+    "claim_support_rate": 0.30,
+    "retrieval_alignment_score": 0.20,
+    "source_quality_score": 0.14,
+    "sample_overlap_stability": 0.14,
+    "semantic_stability": 0.14,
     "retrieval_peak_score": 0.08,
 }
 
@@ -53,7 +53,21 @@ def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) 
         score = min(score, 65)
         applied.append("high-impact claim lacks source support: score capped at 65")
 
-    if caps.get("evidence_required") and int(caps.get("partial_support_claims", 0)) > 0:
+    if (
+        caps.get("evidence_required")
+        and int(caps.get("partial_support_claims", 0)) > 0
+        and features.get("sample_overlap_stability", 1.0) <= 0.50
+    ):
+        score = min(score, 50)
+        applied.append("partial source support without sample corroboration: score capped at 50")
+    elif (
+        caps.get("evidence_required")
+        and int(caps.get("partial_support_claims", 0)) > 0
+        and source_quality <= 0.30
+    ):
+        score = min(score, 50)
+        applied.append("only partial support from low-provenance sources: score capped at 50")
+    elif caps.get("evidence_required") and int(caps.get("partial_support_claims", 0)) > 0:
         score = min(score, 74)
         applied.append("some checkable claims only have partial source support: score capped at 74")
 

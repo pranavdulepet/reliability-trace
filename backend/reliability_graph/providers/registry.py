@@ -53,16 +53,7 @@ def build_provider(provider: str, api_key: str) -> ModelProvider:
 
 def list_provider_metadata(saved_providers: List[str], env_key_providers: Optional[List[str]] = None) -> List[Dict[str, object]]:
     env_key_providers = env_key_providers or []
-    rows: List[Dict[str, object]] = [
-        {
-            "provider": "preview",
-            "label": "Core Engine",
-            "default_model": None,
-            "key_env_var": None,
-            "key_state": "not_required",
-            "capabilities": ["generate", "report"],
-        }
-    ]
+    rows: List[Dict[str, object]] = []
     for provider, details in PROVIDER_DETAILS.items():
         if provider in saved_providers:
             state = "saved"

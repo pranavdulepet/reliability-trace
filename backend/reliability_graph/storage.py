@@ -537,7 +537,7 @@ class Storage:
                     request.conversation_id,
                     request.user_message_id,
                     request.question,
-                    request.provider or "preview",
+                    request.provider or "unresolved",
                     request.model,
                     request.samples,
                     request.max_cost_usd,

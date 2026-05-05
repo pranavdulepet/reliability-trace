@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 from ..providers import build_provider
 from ..providers.base import GenerateRequest, ModelMessage, ProviderError
 from ..retrieval import compact_snippet, evidence_for_claims, search_chunks, text_similarity, tokenize
+from ..verifier import EntailmentResult, EntailmentVerifier, VerifierUnavailable
 from .scoring import compute_reliability_score
 
 ProviderKeyResolver = Callable[[str], Awaitable[Optional[str]]]
@@ -17,6 +18,24 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
 ]
+
+
+class PipelineStageError(RuntimeError):
+    def __init__(self, code: str, stage: str, message: str, retryable: bool = True) -> None:
+        super().__init__(message)
+        self.code = code
+        self.stage = stage
+        self.retryable = retryable
+        self.message = message
+
+    def to_event(self) -> Dict[str, Any]:
+        return {
+            "type": "error",
+            "code": self.code,
+            "stage": self.stage,
+            "retryable": self.retryable,
+            "message": self.message,
+        }
 
 
 class ReliabilityPipeline:
@@ -43,9 +62,11 @@ class ReliabilityPipeline:
         self,
         retrieval_chunks: Optional[List[Dict[str, Any]]] = None,
         calibration_report: Optional[Dict[str, Any]] = None,
+        entailment_verifier: Optional[EntailmentVerifier] = None,
     ) -> None:
         self.trace: List[Dict[str, Any]] = []
         self.retrieval_chunks = retrieval_chunks or []
+        self.entailment_verifier = entailment_verifier
         self.calibration_report = calibration_report or {
             "status": "needs_labels",
             "label_count": 0,
@@ -107,12 +128,15 @@ class ReliabilityPipeline:
             return {"claim_count": len(state["claims"]), "structured": bool(state.get("structured_claims_used"))}
 
         if step_type == "assumption_extraction":
-            state["assumptions"] = self._extract_assumptions(state)
-            return {"assumption_count": len(state["assumptions"])}
+            state["assumptions"] = await self._extract_assumptions(state, resolve_key)
+            return {"assumption_count": len(state["assumptions"]), "structured": bool(state.get("structured_assumptions_used"))}
 
         if step_type == "decision_analysis":
-            state["decision_analysis"] = self._decision_analysis(state)
-            return {"alternative_count": len(state["decision_analysis"]["alternatives"])}
+            state["decision_analysis"] = await self._decision_analysis(state, resolve_key)
+            return {
+                "alternative_count": len(state["decision_analysis"]["alternatives"]),
+                "structured": bool(state.get("structured_decision_used")),
+            }
 
         if step_type == "evidence_retrieval":
             state["evidence"] = self._evidence(state)
@@ -173,65 +197,80 @@ class ReliabilityPipeline:
                 for index, text in enumerate(candidate_texts[: max(1, int(run["samples"]))])
             ], None
 
-        if run["provider"] not in ["preview", "local"] and run["use_live_provider"]:
-            api_key = await resolve_key(run["provider"])
-            if api_key:
-                try:
-                    provider = build_provider(run["provider"], api_key)
-                    candidates = []
-                    context = self._retrieval_context(run["question"])
-                    conversation_context = self._conversation_context(run.get("prior_context", []))
-                    provider_errors: List[str] = []
-                    for index in range(int(run["samples"])):
-                        prompt = self._candidate_prompt(run["question"], index, context, conversation_context)
-                        response = None
-                        answer_text = ""
-                        for attempt in range(2):
-                            attempt_prompt = prompt
-                            if attempt == 1:
-                                attempt_prompt += (
-                                    "\n\nReturn only the final answer. Do not repeat the prompt, instructions, or conversation."
-                                )
-                            response = await provider.generate(
-                                GenerateRequest(
-                                    messages=[
-                                        ModelMessage(
-                                            role="system",
-                                            content=(
-                                                "Generate one candidate answer for a reliability audit. "
-                                                "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning."
-                                            ),
-                                        ),
-                                        ModelMessage(role="user", content=attempt_prompt),
-                                    ],
-                                    model=run.get("model"),
-                                    temperature=0.3 + (index * 0.08),
-                                    max_tokens=420,
-                                )
-                            )
-                            answer_text = self._clean_model_text(response.text)
-                            if not self._is_bad_model_answer(answer_text, run["question"], prompt):
-                                break
-                            provider_errors.append("provider returned an empty or echoed answer; retried once")
-                            answer_text = ""
-                        if not answer_text:
-                            answer_text = self._local_candidate_text(run["question"], index, context)
-                        candidates.append(
-                            {
-                                "candidate_id": "cand_%d" % (index + 1),
-                                "provider": response.provider if response else run["provider"],
-                                "model": response.model if response else (run.get("model") or "provider_default"),
-                                "prompt_variant": "variant_%d" % (index + 1),
-                                "answer_text": answer_text,
-                                "semantic_cluster_id": None,
-                            }
+        if run["provider"] in ["preview", "local"] or not run.get("use_live_provider"):
+            raise PipelineStageError(
+                "provider_required",
+                "candidate_generation",
+                "A connected LLM provider is required for chat runs.",
+                retryable=False,
+            )
+        api_key = await resolve_key(run["provider"])
+        if not api_key:
+            raise PipelineStageError(
+                "provider_key_missing",
+                "candidate_generation",
+                "No active provider key was available for the selected provider.",
+                retryable=False,
+            )
+        try:
+            provider = build_provider(run["provider"], api_key)
+            candidates = []
+            context = self._retrieval_context(run["question"])
+            conversation_context = self._conversation_context(run.get("prior_context", []))
+            provider_errors: List[str] = []
+            for index in range(int(run["samples"])):
+                prompt = self._candidate_prompt(run["question"], index, context, conversation_context)
+                response = None
+                answer_text = ""
+                for attempt in range(2):
+                    attempt_prompt = prompt
+                    if attempt == 1:
+                        attempt_prompt += "\n\nReturn only the final answer. Do not repeat the prompt, instructions, or conversation."
+                    response = await provider.generate(
+                        GenerateRequest(
+                            messages=[
+                                ModelMessage(
+                                    role="system",
+                                    content=(
+                                        "Generate one candidate answer for a reliability audit. "
+                                        "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning."
+                                    ),
+                                ),
+                                ModelMessage(role="user", content=attempt_prompt),
+                            ],
+                            model=run.get("model"),
+                            temperature=0.3 + (index * 0.08),
+                            max_tokens=420,
                         )
-                    return candidates, "; ".join(dict.fromkeys(provider_errors)) or None
-                except ProviderError as exc:
-                    context = self._retrieval_context(run["question"])
-                    return self._local_candidates(run["question"], int(run["samples"]), context), self._safe_error_text(str(exc))
-        context = self._retrieval_context(run["question"])
-        return self._local_candidates(run["question"], int(run["samples"]), context), None
+                    )
+                    answer_text = self._clean_model_text(response.text)
+                    if not self._is_bad_model_answer(answer_text, run["question"], prompt):
+                        break
+                    provider_errors.append("provider returned an empty or echoed answer; retried once")
+                    answer_text = ""
+                if not answer_text:
+                    raise PipelineStageError(
+                        "provider_bad_answer",
+                        "candidate_generation",
+                        "The selected provider returned an empty, echoed, or malformed answer after retry.",
+                    )
+                candidates.append(
+                    {
+                        "candidate_id": "cand_%d" % (index + 1),
+                        "provider": response.provider if response else run["provider"],
+                        "model": response.model if response else (run.get("model") or "provider_default"),
+                        "prompt_variant": "variant_%d" % (index + 1),
+                        "answer_text": answer_text,
+                        "semantic_cluster_id": None,
+                    }
+                )
+            return candidates, "; ".join(dict.fromkeys(provider_errors)) or None
+        except ProviderError as exc:
+            raise PipelineStageError(
+                "provider_error",
+                "candidate_generation",
+                self._safe_error_text(str(exc)),
+            ) from exc
 
     def _candidate_prompt(self, question: str, index: int, context: str = "", conversation_context: str = "") -> str:
         variants = [
@@ -256,104 +295,6 @@ class ReliabilityPipeline:
         return (
             "\n\n".join(parts)
         )
-
-    def _local_candidates(self, question: str, samples: int, context: str = "") -> List[Dict[str, Any]]:
-        return [
-            {
-                "candidate_id": "cand_%d" % (index + 1),
-                "provider": "preview",
-                "model": "core-engine",
-                "prompt_variant": "preview_%d" % (index + 1),
-                "answer_text": self._local_candidate_text(question, index, context),
-                "semantic_cluster_id": None,
-            }
-            for index in range(samples)
-        ]
-
-    def _local_candidate_text(self, question: str, index: int, context: str = "") -> str:
-        q = question.strip()
-        topic = self._question_topic(q)
-        lowered = q.lower()
-        source_answer = self._local_source_answer(context)
-        if source_answer:
-            templates = [
-                "Based on the attached source, %s",
-                "The attached source supports this answer: %s",
-            ]
-            return templates[index % len(templates)] % source_answer
-        if self._is_high_stakes_question(q):
-            templates = [
-                (
-                    "For the question about %s, use this answer only as general orientation. The safe answer is to separate background information "
-                    "from action: verify the facts in a trusted source, check whether the situation has personal medical, legal, "
-                    "financial, or safety consequences, and get qualified help before acting."
-                ),
-                (
-                    "%s needs a cautious answer because the cost of being wrong can be high. I would treat any unsupported claim as "
-                    "unreliable, preserve the uncertainty, and rely on professional or primary-source guidance before making a decision."
-                ),
-            ]
-        elif any(term in lowered for term in ["latest", "current", "today", "recent", "now", "2026"]):
-            templates = [
-                (
-                    "I cannot verify current facts about %s without an attached or fetched source in this run. A useful answer can frame "
-                    "what to check, but the factual conclusion should wait for a dated, reliable source."
-                ),
-                (
-                    "For a current question about %s, the main answer is conditional: use a dated source, compare the claim against it, "
-                    "and treat unsupported details as provisional rather than established."
-                ),
-            ]
-        elif any(term in lowered for term in ["should", "worth", "choose", "recommend", "better"]):
-            templates = [
-                (
-                    "For the question about %s, the practical answer is to choose the option with the best evidence, lowest irreversible cost, and clearest "
-                    "failure signal. If the evidence is thin, start with the smallest reversible step that would teach you whether to continue."
-                ),
-                (
-                    "I would decide %s by listing the real alternatives, the constraints that matter, and what result would change the decision. "
-                    "A confident recommendation is not justified until the high-impact assumptions have support."
-                ),
-            ]
-        elif lowered.startswith(("explain", "what is", "how does", "why does")):
-            templates = [
-                (
-                    "%s can be understood by separating the core idea, the mechanism, and the limits. The core answer should be simple first, "
-                    "then checked claim by claim against sources if the details matter."
-                ),
-                (
-                    "A clear explanation of %s should define the term, show how it works in one concrete example, and call out where the "
-                    "explanation depends on context or source evidence."
-                ),
-            ]
-        else:
-            templates = [
-                (
-                    "For %s, the most useful answer is a direct one with its uncertainty attached. The answer should identify the main claim, "
-                    "the evidence needed to support it, and the next check that would change the conclusion."
-                ),
-                (
-                    "%s should be answered by separating stable reasoning from unsupported facts. I would trust the answer only where the "
-                    "claim checks and source matches support it."
-                ),
-            ]
-        return templates[index % len(templates)] % topic
-
-    def _local_source_answer(self, context: str) -> Optional[str]:
-        if not context:
-            return None
-        lowered = context.lower()
-        if any(term in lowered for term in ["ignore previous instructions", "disregard previous instructions", "system prompt"]):
-            return (
-                "the attachment contains prompt-injection text such as 'Ignore previous instructions'. "
-                "Treat that text as source content, not as directions to the model."
-            )
-        match = re.search(r"\[S\d+\]\s+[^:]+:\s+(.+)", context, flags=re.DOTALL)
-        if not match:
-            return None
-        snippet = re.sub(r"\s+", " ", match.group(1)).strip()
-        sentence = self._sentences(snippet)
-        return (sentence[0] if sentence else snippet)[:500]
 
     def _classify_question(self, question: str) -> str:
         q = question.lower()
@@ -454,18 +395,34 @@ class ReliabilityPipeline:
         resolve_key: ProviderKeyResolver,
     ) -> List[Dict[str, Any]]:
         run = state["run"]
-        if run["provider"] not in ["preview", "local"] and run.get("use_live_provider"):
-            api_key = await resolve_key(run["provider"])
-            if api_key:
-                try:
-                    claims = await self._extract_claims_with_provider(state, api_key)
-                    if claims:
-                        state["structured_claims_used"] = True
-                        return claims
-                except ProviderError as exc:
-                    state["structured_analysis_error"] = self._safe_error_text(str(exc))
-        state["structured_claims_used"] = False
-        return self._fallback_claims(state)
+        if self._is_eval_run(run):
+            state["structured_claims_used"] = False
+            return self._eval_claims(state)
+        if run["provider"] in ["preview", "local"] or not run.get("use_live_provider"):
+            raise PipelineStageError(
+                "provider_required",
+                "claim_extraction",
+                "A connected LLM provider is required to extract answer claims.",
+                retryable=False,
+            )
+        api_key = await resolve_key(run["provider"])
+        if not api_key:
+            raise PipelineStageError(
+                "provider_key_missing",
+                "claim_extraction",
+                "No active provider key was available for claim extraction.",
+                retryable=False,
+            )
+        try:
+            claims = await self._extract_claims_with_provider(state, api_key)
+        except ProviderError as exc:
+            raise PipelineStageError(
+                "provider_invalid_claims",
+                "claim_extraction",
+                self._safe_error_text(str(exc)),
+            ) from exc
+        state["structured_claims_used"] = True
+        return claims
 
     async def _extract_claims_with_provider(self, state: Dict[str, Any], api_key: str) -> List[Dict[str, Any]]:
         run = state["run"]
@@ -506,7 +463,7 @@ class ReliabilityPipeline:
                 return claims
         raise ProviderError(last_error)
 
-    def _fallback_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _eval_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         sentences = self._claim_units(state["answer"]["final_answer"])
         claims: List[Dict[str, Any]] = []
         for sentence in sentences:
@@ -562,7 +519,103 @@ class ReliabilityPipeline:
                     expanded.append(cleaned)
         return expanded
 
-    def _extract_assumptions(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _extract_assumptions(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> List[Dict[str, Any]]:
+        run = state["run"]
+        if self._is_eval_run(run):
+            state["structured_assumptions_used"] = False
+            return self._eval_assumptions(state)
+        api_key = await resolve_key(run["provider"])
+        if not api_key:
+            raise PipelineStageError(
+                "provider_key_missing",
+                "assumption_extraction",
+                "No active provider key was available for assumption extraction.",
+                retryable=False,
+            )
+        try:
+            assumptions = await self._extract_assumptions_with_provider(state, api_key)
+        except ProviderError as exc:
+            raise PipelineStageError(
+                "provider_invalid_assumptions",
+                "assumption_extraction",
+                self._safe_error_text(str(exc)),
+            ) from exc
+        state["structured_assumptions_used"] = True
+        return assumptions
+
+    async def _extract_assumptions_with_provider(self, state: Dict[str, Any], api_key: str) -> List[Dict[str, Any]]:
+        run = state["run"]
+        provider = build_provider(run["provider"], api_key)
+        prompt = (
+            "Extract 1 to 4 assumptions that affect whether the answer should be trusted. Return JSON only:\n"
+            '{"assumptions":[{"text":"string","importance":"high|medium|low","evidence_status":"supported|untested|contradicted",'
+            '"would_change_recommendation_if_false":true,"sensitivity_notes":"string"}]}\n\n'
+            "Question:\n%s\n\nAnswer:\n%s" % (run["question"][:2000], state["answer"]["final_answer"][:5000])
+        )
+        last_error = "provider did not return valid assumption JSON"
+        for attempt in range(2):
+            response = await provider.generate(
+                GenerateRequest(
+                    messages=[
+                        ModelMessage(
+                            role="system",
+                            content=(
+                                "You extract concise trust assumptions for an answer reliability audit. Return valid JSON only. "
+                                "Do not reveal private reasoning."
+                            ),
+                        ),
+                        ModelMessage(role="user", content=prompt if attempt == 0 else prompt + "\n\nFix the JSON schema exactly."),
+                    ],
+                    model=run.get("model"),
+                    temperature=0.0,
+                    max_tokens=700,
+                    response_format={"type": "json_object"},
+                )
+            )
+            try:
+                data = self._json_from_model_text(response.text)
+            except ProviderError as exc:
+                last_error = str(exc)
+                continue
+            assumptions, last_error = self._validate_assumption_json(data)
+            if assumptions:
+                return assumptions
+        raise ProviderError(last_error)
+
+    def _validate_assumption_json(self, data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+        raw = data.get("assumptions")
+        if not isinstance(raw, list):
+            return [], "assumption JSON must contain an assumptions array"
+        assumptions = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if len(tokenize(text)) < 4:
+                continue
+            importance = str(item.get("importance") or "medium").strip()
+            if importance not in {"high", "medium", "low"}:
+                importance = "medium"
+            evidence_status = str(item.get("evidence_status") or "untested").strip()
+            if evidence_status not in {"supported", "untested", "contradicted"}:
+                evidence_status = "untested"
+            assumptions.append(
+                {
+                    "assumption_id": "a%d" % (len(assumptions) + 1),
+                    "text": text[:700],
+                    "importance": importance,
+                    "evidence_status": evidence_status,
+                    "would_change_recommendation_if_false": bool(item.get("would_change_recommendation_if_false", True)),
+                    "sensitivity_notes": str(item.get("sensitivity_notes") or "Changing this assumption could change trust in the answer.")[:700],
+                }
+            )
+            if len(assumptions) >= 4:
+                break
+        if not assumptions:
+            return [], "assumption JSON did not contain usable assumptions"
+        return assumptions, ""
+
+    def _eval_assumptions(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         question = state["run"]["question"]
         has_sources = bool(self.retrieval_chunks)
         assumptions = [
@@ -610,16 +663,131 @@ class ReliabilityPipeline:
             )
         return assumptions
 
-    def _decision_analysis(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    async def _decision_analysis(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> Dict[str, Any]:
+        run = state["run"]
+        if self._is_eval_run(run):
+            state["structured_decision_used"] = False
+            return self._eval_decision_analysis(state)
+        if state["question_type"] not in ["decision_qa", "mixed"] and not self._is_high_stakes_question(run["question"]):
+            state["structured_decision_used"] = False
+            return self._non_applicable_decision_analysis()
+        api_key = await resolve_key(run["provider"])
+        if not api_key:
+            raise PipelineStageError(
+                "provider_key_missing",
+                "decision_analysis",
+                "No active provider key was available for decision analysis.",
+                retryable=False,
+            )
+        try:
+            decision = await self._decision_analysis_with_provider(state, api_key)
+        except ProviderError as exc:
+            raise PipelineStageError(
+                "provider_invalid_decision",
+                "decision_analysis",
+                self._safe_error_text(str(exc)),
+            ) from exc
+        state["structured_decision_used"] = True
+        return decision
+
+    async def _decision_analysis_with_provider(self, state: Dict[str, Any], api_key: str) -> Dict[str, Any]:
+        run = state["run"]
+        provider = build_provider(run["provider"], api_key)
+        prompt = (
+            "Frame decision support for this answer. Return JSON only:\n"
+            '{"applicable":true,"alternatives":[{"name":"string","evidence_status":"supported|weak|not_grounded|not_enough_context",'
+            '"basis":"string","risk":"string"}],"criteria":[{"name":"string","basis":"string"}],'
+            '"recommendation":"string","sensitivity_summary":"string","label":"Decision support, not objective truth."}\n\n'
+            "Question:\n%s\n\nAnswer:\n%s\n\nClaim assessments:\n%s"
+            % (
+                run["question"][:2000],
+                state["answer"]["final_answer"][:5000],
+                json.dumps(state.get("claim_assessments", [])[:8], ensure_ascii=True, separators=(",", ":")),
+            )
+        )
+        last_error = "provider did not return valid decision JSON"
+        for attempt in range(2):
+            response = await provider.generate(
+                GenerateRequest(
+                    messages=[
+                        ModelMessage(
+                            role="system",
+                            content=(
+                                "You produce concise decision support for an answer reliability audit. Return valid JSON only. "
+                                "Do not reveal private reasoning."
+                            ),
+                        ),
+                        ModelMessage(role="user", content=prompt if attempt == 0 else prompt + "\n\nFix the JSON schema exactly."),
+                    ],
+                    model=run.get("model"),
+                    temperature=0.0,
+                    max_tokens=900,
+                    response_format={"type": "json_object"},
+                )
+            )
+            try:
+                data = self._json_from_model_text(response.text)
+            except ProviderError as exc:
+                last_error = str(exc)
+                continue
+            decision, last_error = self._validate_decision_json(data)
+            if decision:
+                return decision
+        raise ProviderError(last_error)
+
+    def _validate_decision_json(self, data: Dict[str, Any]) -> Tuple[Dict[str, Any], str]:
+        alternatives_raw = data.get("alternatives")
+        criteria_raw = data.get("criteria")
+        if not isinstance(alternatives_raw, list) or not isinstance(criteria_raw, list):
+            return {}, "decision JSON must contain alternatives and criteria arrays"
+        alternatives = []
+        for item in alternatives_raw[:4]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            alternatives.append(
+                {
+                    "name": name[:240],
+                    "evidence_status": str(item.get("evidence_status") or "not_enough_context")[:80],
+                    "basis": str(item.get("basis") or "")[:500],
+                    "risk": str(item.get("risk") or "")[:500],
+                }
+            )
+        criteria = []
+        for item in criteria_raw[:6]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            criteria.append({"name": name[:160], "basis": str(item.get("basis") or "")[:500]})
+        recommendation = str(data.get("recommendation") or (alternatives[0]["name"] if alternatives else "")).strip()
+        if not alternatives or not criteria or not recommendation:
+            return {}, "decision JSON did not contain usable decision support"
+        return {
+            "applicable": bool(data.get("applicable", True)),
+            "alternatives": alternatives,
+            "criteria": criteria,
+            "recommendation": recommendation[:240],
+            "sensitivity_summary": str(data.get("sensitivity_summary") or "Decision support should change when evidence or constraints change.")[:700],
+            "label": str(data.get("label") or "Decision support, not objective truth.")[:160],
+        }, ""
+
+    def _non_applicable_decision_analysis(self) -> Dict[str, Any]:
+        return {
+            "applicable": False,
+            "alternatives": [],
+            "criteria": [],
+            "recommendation": None,
+            "sensitivity_summary": "Decision analysis is not central for this question type.",
+        }
+
+    def _eval_decision_analysis(self, state: Dict[str, Any]) -> Dict[str, Any]:
         question_type = state["question_type"]
         if question_type not in ["decision_qa", "mixed"]:
-            return {
-                "applicable": False,
-                "alternatives": [],
-                "criteria": [],
-                "recommendation": None,
-                "sensitivity_summary": "Decision analysis is not central for this question type.",
-            }
+            return self._non_applicable_decision_analysis()
         topic = self._question_topic(state["run"]["question"])
         external_evidence = [
             item for item in state.get("evidence", []) if item.get("source_type") not in {"system_trace", "internal_policy"}
@@ -681,35 +849,48 @@ class ReliabilityPipeline:
         return evidence_for_claims(state["claims"], self.retrieval_chunks)
 
     async def _assess_claims(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> List[Dict[str, Any]]:
-        deterministic = self._deterministic_assess_claims(state)
+        if self._is_eval_run(state["run"]):
+            state["structured_evidence_used"] = False
+            return self._eval_assess_claims(state)
         state["structured_evidence_used"] = False
-        if not self._should_run_structured_evidence_assessment(state):
-            return deterministic
+        provider_assessments: List[Dict[str, Any]] = []
+        checkable_claims_with_evidence = [
+            claim
+            for claim in state.get("claims", [])
+            if claim.get("checkability") != "not_checkable" and self._evidence_by_claim(state).get(claim["claim_id"])
+        ]
+        if not checkable_claims_with_evidence:
+            return self._assess_claims_with_verifier(state, {})
         api_key = await resolve_key(state["run"]["provider"])
         if not api_key:
-            return deterministic
+            raise PipelineStageError(
+                "provider_key_missing",
+                "claim_check",
+                "No active provider key was available for evidence assessment.",
+                retryable=False,
+            )
         try:
-            structured = await self._assess_claims_with_provider(state, deterministic, api_key)
+            provider_assessments = await self._assess_claims_with_provider(state, api_key)
         except ProviderError as exc:
-            state["structured_analysis_error"] = self._safe_error_text(str(exc))
-            return deterministic
-        if structured:
-            state["structured_evidence_used"] = True
-            return structured
-        return deterministic
-
-    def _should_run_structured_evidence_assessment(self, state: Dict[str, Any]) -> bool:
-        run = state["run"]
-        if run["provider"] in ["preview", "local"] or not run.get("use_live_provider"):
-            return False
-        if not state.get("evidence"):
-            return False
-        return any(claim.get("checkability") != "not_checkable" for claim in state.get("claims", []))
+            raise PipelineStageError(
+                "provider_invalid_evidence_assessment",
+                "claim_check",
+                self._safe_error_text(str(exc)),
+            ) from exc
+        provider_by_claim = {assessment["claim_id"]: assessment for assessment in provider_assessments}
+        missing = [claim["claim_id"] for claim in checkable_claims_with_evidence if claim["claim_id"] not in provider_by_claim]
+        if missing:
+            raise PipelineStageError(
+                "provider_incomplete_evidence_assessment",
+                "claim_check",
+                "Provider evidence assessment omitted checked claim(s): %s" % ", ".join(missing),
+            )
+        state["structured_evidence_used"] = True
+        return self._assess_claims_with_verifier(state, provider_by_claim)
 
     async def _assess_claims_with_provider(
         self,
         state: Dict[str, Any],
-        deterministic: List[Dict[str, Any]],
         api_key: str,
     ) -> List[Dict[str, Any]]:
         run = state["run"]
@@ -740,7 +921,7 @@ class ReliabilityPipeline:
             except ProviderError as exc:
                 last_error = str(exc)
                 continue
-            assessments, last_error = self._validate_evidence_assessment_json(data, state, deterministic)
+            assessments, last_error = self._validate_evidence_assessment_json(data, state)
             if assessments:
                 return assessments
         raise ProviderError(last_error)
@@ -760,7 +941,6 @@ class ReliabilityPipeline:
                         {
                             "evidence_id": item["evidence_id"],
                             "source_title": item.get("source_title"),
-                            "heuristic_relation": item.get("support_relation"),
                             "snippet": item.get("snippet", "")[:700],
                         }
                         for item in evidence_by_claim.get(claim["claim_id"], [])[:3]
@@ -783,16 +963,14 @@ class ReliabilityPipeline:
         self,
         data: Dict[str, Any],
         state: Dict[str, Any],
-        deterministic: List[Dict[str, Any]],
     ) -> Tuple[List[Dict[str, Any]], str]:
         raw = data.get("assessments")
         if not isinstance(raw, list):
             return [], "evidence assessment JSON must contain an assessments array"
-        deterministic_by_claim = {item["claim_id"]: item for item in deterministic}
         evidence_by_claim = self._evidence_by_claim(state)
         valid_claim_ids = {claim["claim_id"] for claim in state.get("claims", [])}
         allowed = {"supported", "partially_supported", "contradicted", "not_found"}
-        structured_by_claim: Dict[str, Dict[str, Any]] = {}
+        assessments: List[Dict[str, Any]] = []
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -821,17 +999,154 @@ class ReliabilityPipeline:
                 support_score=item.get("support_score"),
                 method="structured_provider",
             )
-            structured_by_claim[claim_id] = assessment
-        if not structured_by_claim:
+            assessments.append(assessment)
+        if not assessments:
             return [], "evidence assessment JSON did not contain usable assessments"
-        merged = []
+        return assessments, ""
+
+    def _assess_claims_with_verifier(
+        self,
+        state: Dict[str, Any],
+        provider_by_claim: Dict[str, Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        evidence_by_claim = self._evidence_by_claim(state)
+        assessments = []
         for claim in state.get("claims", []):
-            claim_id = claim["claim_id"]
+            evidence_items = evidence_by_claim.get(claim["claim_id"], [])
+            evidence_ids = [item["evidence_id"] for item in evidence_items]
             if claim.get("checkability") == "not_checkable":
-                merged.append(deterministic_by_claim[claim_id])
-            else:
-                merged.append(structured_by_claim.get(claim_id) or deterministic_by_claim[claim_id])
-        return merged, ""
+                assessments.append(
+                    {
+                        "claim_id": claim["claim_id"],
+                        "status": "not_checkable",
+                        "support_score": 0.5,
+                        "explanation": "This claim is preference-sensitive or methodological, so it is not scored as source-backed factual support.",
+                        "why": "This claim is preference-sensitive or methodological, so it is not scored as source-backed factual support.",
+                        "source_limit": "No source match is required for this non-checkable claim.",
+                        "evidence_ids": evidence_ids,
+                        "assessment_method": "not_checkable",
+                    }
+                )
+                continue
+            if not evidence_items:
+                assessments.append(
+                    self._assessment_from_relation(
+                        claim_id=claim["claim_id"],
+                        relation="not_found",
+                        evidence_ids=[],
+                        why="No attached, fetched, or web source supports this claim.",
+                        source_limit="No evidence was retrieved for this claim.",
+                        support_score=0.0,
+                        method="provider_entailment_verifier",
+                    )
+                )
+                continue
+            verifier_result = self._best_verifier_result(claim["text"], evidence_items)
+            provider_relation = provider_by_claim.get(claim["claim_id"], {}).get("relation")
+            relation = self._combine_provider_and_verifier_relation(provider_relation, verifier_result.relation)
+            why = self._combined_assessment_reason(provider_by_claim.get(claim["claim_id"]), verifier_result, relation)
+            assessment = self._assessment_from_relation(
+                claim_id=claim["claim_id"],
+                relation=relation,
+                evidence_ids=evidence_ids,
+                why=why,
+                source_limit=self._source_limit_for_relation(relation),
+                support_score=self._combined_support_score(relation, verifier_result),
+                method="provider_entailment_verifier",
+            )
+            assessment.update(
+                {
+                    "verifier": verifier_result.model,
+                    "entailment_score": verifier_result.entailment_score,
+                    "contradiction_score": verifier_result.contradiction_score,
+                    "neutral_score": verifier_result.neutral_score,
+                    "provider_relation": provider_relation,
+                }
+            )
+            assessments.append(assessment)
+        return assessments
+
+    def _best_verifier_result(self, claim_text: str, evidence_items: List[Dict[str, Any]]) -> EntailmentResult:
+        verifier = self.entailment_verifier
+        if verifier is None:
+            raise PipelineStageError(
+                "verifier_missing",
+                "claim_check",
+                "The entailment verifier is not configured. Run `python scripts/setup_nli_verifier.py` and restart the backend.",
+                retryable=False,
+            )
+        results = []
+        for evidence in evidence_items[:3]:
+            try:
+                results.append(verifier.verify(evidence.get("snippet", ""), claim_text))
+            except VerifierUnavailable as exc:
+                raise PipelineStageError(
+                    "verifier_unavailable",
+                    "claim_check",
+                    self._safe_error_text(str(exc)),
+                    retryable=False,
+                ) from exc
+        if not results:
+            return EntailmentResult("partially_supported", 0.0, 0.0, 1.0, verifier.status().get("model") or verifier.name)
+        contradicted = max(results, key=lambda result: result.contradiction_score)
+        if contradicted.contradiction_score >= 0.55:
+            return contradicted
+        return max(results, key=lambda result: result.entailment_score)
+
+    def _combine_provider_and_verifier_relation(self, provider_relation: Optional[str], verifier_relation: str) -> str:
+        if provider_relation is None:
+            return verifier_relation if verifier_relation in {"supported", "partially_supported", "contradicted"} else "not_found"
+        if provider_relation == "contradicted" or verifier_relation == "contradicted":
+            return "contradicted"
+        if provider_relation == "not_found":
+            return "partially_supported" if verifier_relation == "supported" else "not_found"
+        if provider_relation == "supported" and verifier_relation == "supported":
+            return "supported"
+        if provider_relation in {"supported", "partially_supported"} or verifier_relation in {"supported", "partially_supported"}:
+            return "partially_supported"
+        return "not_found"
+
+    def _combined_assessment_reason(
+        self,
+        provider_assessment: Optional[Dict[str, Any]],
+        verifier_result: EntailmentResult,
+        relation: str,
+    ) -> str:
+        provider_reason = (provider_assessment or {}).get("why") or (provider_assessment or {}).get("explanation")
+        if relation == "contradicted":
+            verifier_reason = "The entailment verifier found contradiction risk in the matched evidence."
+        elif relation == "supported":
+            verifier_reason = "The provider assessment and entailment verifier both support the claim."
+        elif relation == "partially_supported":
+            verifier_reason = "Provider and verifier signals were mixed or incomplete, so the claim is treated as only partially supported."
+        else:
+            verifier_reason = "The provider assessment or verifier did not find direct support."
+        if provider_reason:
+            return "%s %s" % (provider_reason.rstrip("."), verifier_reason)
+        return verifier_reason
+
+    def _combined_support_score(self, relation: str, verifier_result: EntailmentResult) -> float:
+        if relation == "supported":
+            return max(0.65, min(0.95, verifier_result.entailment_score))
+        if relation == "partially_supported":
+            return min(0.72, max(0.3, verifier_result.entailment_score * 0.75))
+        return 0.0
+
+    def _source_limit_for_relation(self, relation: str) -> str:
+        if relation == "supported":
+            return "Support is limited to the retrieved snippets checked by the provider and entailment verifier."
+        if relation == "partially_supported":
+            return "Provider and entailment signals are incomplete or mixed; inspect the matched snippet before relying on it."
+        if relation == "contradicted":
+            return "At least one matched snippet conflicts with the claim."
+        return "No attached, fetched, or web source supports this claim."
+
+    def _eval_assess_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if self.entailment_verifier is None:
+            from ..verifier import FixtureEntailmentVerifier
+
+            self.entailment_verifier = FixtureEntailmentVerifier()
+        return self._assess_claims_with_verifier(state, {})
 
     def _assessment_from_relation(
         self,
@@ -907,50 +1222,6 @@ class ReliabilityPipeline:
             evidence_by_claim.setdefault(item["claim_id"], []).append(item)
         return evidence_by_claim
 
-    def _deterministic_assess_claims(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        evidence_by_claim = self._evidence_by_claim(state)
-        assessments = []
-        for claim in state["claims"]:
-            evidence_items = evidence_by_claim.get(claim["claim_id"], [])
-            evidence_ids = [item["evidence_id"] for item in evidence_items]
-            if claim.get("checkability") == "not_checkable" and not evidence_items:
-                status = "not_checkable"
-                relation = None
-                support = 0.5
-            elif any(item["support_relation"] == "contradicts" for item in evidence_items):
-                status = "contradicted"
-                relation = "contradicted"
-                support = 0.0
-            elif evidence_items:
-                best = max(float(item.get("relevance_score", 0.25)) for item in evidence_items)
-                if best >= 0.34 and any(item["support_relation"] == "supports" for item in evidence_items):
-                    status = "supported"
-                    relation = "supported"
-                    support = min(0.92, 0.55 + best)
-                else:
-                    status = "partially_supported"
-                    relation = "partially_supported"
-                    support = min(0.72, 0.36 + best)
-            else:
-                status = "insufficient_evidence"
-                relation = "not_found"
-                support = 0.0
-            explanation = self._assessment_explanation(status, evidence_items)
-            assessment = {
-                "claim_id": claim["claim_id"],
-                "status": status,
-                "support_score": round(support, 3),
-                "explanation": explanation,
-                "why": explanation,
-                "source_limit": self._source_limit_for_assessment(status, evidence_items),
-                "evidence_ids": evidence_ids,
-                "assessment_method": "deterministic_not_checkable" if status == "not_checkable" else "deterministic_entailment",
-            }
-            if relation is not None:
-                assessment["relation"] = relation
-            assessments.append(assessment)
-        return assessments
-
     def _stress_tests(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         factual_without_sources = (
             state["question_type"] in ["factual_qa", "research_qa", "mixed"]
@@ -1008,7 +1279,7 @@ class ReliabilityPipeline:
         contradicted = len([assessment for assessment in assessments if assessment["status"] == "contradicted"]) / total
         return {
             "judge_score_is_diagnostic_only": True,
-            "judge_model": "deterministic_signal_summary",
+            "judge_model": "computed_signal_summary",
             "summary_version": "rg-signal-summary",
             "judge_calibration": "not_a_model_judge",
             "dimensions": {
@@ -1031,7 +1302,9 @@ class ReliabilityPipeline:
             for a in scored_assessments
         )
         contradicted = len([a for a in scored_assessments if a["status"] == "contradicted"])
-        insufficient = len([a for a in scored_assessments if a["status"] == "insufficient_evidence"])
+        insufficient = len(
+            [a for a in scored_assessments if a["status"] in {"insufficient_evidence", "not_found"}]
+        )
         source_quality = self._source_quality_score(state["evidence"])
         retrieval_alignment = self._retrieval_alignment_score(state)
         retrieval_peak = self._retrieval_peak_score(state)
@@ -1056,7 +1329,7 @@ class ReliabilityPipeline:
         high_unsupported_claims = [
             assessment
             for assessment in scored_assessments
-            if assessment["status"] == "insufficient_evidence"
+            if assessment["status"] in {"insufficient_evidence", "not_found"}
             and self._claim_by_id(state["claims"], assessment["claim_id"]).get("importance") == "high"
         ]
         caps = {
@@ -1272,6 +1545,9 @@ class ReliabilityPipeline:
         answer = str(run.get("answer_override") or "").strip()
         return self._clean_model_text(answer)[:5000] if answer else None
 
+    def _is_eval_run(self, run: Dict[str, Any]) -> bool:
+        return bool(str(run.get("answer_override") or "").strip())
+
     def _clean_model_text(self, text: str) -> str:
         cleaned = text.strip()
         if "### Answer" in cleaned:
@@ -1483,28 +1759,6 @@ class ReliabilityPipeline:
         if any(term in lowered for term in ["always", "never", "guarantee", "definitely"]):
             flags.append("absolute_language")
         return flags
-
-    def _assessment_explanation(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
-        if status == "not_checkable":
-            return "This is methodological or preference-sensitive guidance, so it is not scored as a source-backed factual claim."
-        if not evidence_items:
-            return "No attached file, fetched URL, or web source chunk matched this claim strongly enough."
-        if status == "contradicted":
-            return "At least one matched source chunk uses contradictory language for this claim."
-        if status == "supported":
-            return "Matched source chunks cover the claim without detected number, date, or polarity conflicts."
-        return "Matched source chunks are relevant but do not fully establish every important part of the claim."
-
-    def _source_limit_for_assessment(self, status: str, evidence_items: List[Dict[str, Any]]) -> str:
-        if status == "not_checkable":
-            return "No source match is required for this methodological claim."
-        if not evidence_items:
-            return "No attached, fetched, or web source supports this claim."
-        if status == "contradicted":
-            return "Matched evidence conflicts with the claim; compare the source snippet before relying on it."
-        if status == "partially_supported":
-            return "The source match is relevant but incomplete or paraphrased too loosely."
-        return "Support is limited to the retrieved source snippets shown in this run."
 
     def _support_and_source_quality(self, state: Dict[str, Any]) -> Tuple[float, float]:
         assessments = [assessment for assessment in state["claim_assessments"] if assessment["status"] != "not_checkable"]
@@ -1865,15 +2119,15 @@ class ReliabilityPipeline:
         basis = [
             {
                 "signal": "Claim support",
-                "method": "atomic_claim_support_with_entailment_checks",
+                "method": "provider_claims_with_entailment_verifier",
                 "research_lineage": "FActScore and SAFE / LongFact",
-                "limitation": "Deterministic checks catch simple numeric, date, and polarity conflicts; provider-backed assessment is optional and still not a proof of truth.",
+                "limitation": "Provider extraction plus an NLI verifier improves claim/source checks, but it is still not proof of truth.",
             },
             {
                 "signal": "Source quality",
-                "method": "source_quality_heuristic",
+                "method": "source_quality_metadata",
                 "research_lineage": "Grounded generation and source-aware factuality evaluation",
-                "limitation": "Source quality is heuristic and needs benchmark calibration.",
+                "limitation": "Source quality uses source metadata and needs benchmark calibration.",
             },
             {
                 "signal": "Sample consistency",

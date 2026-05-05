@@ -9,6 +9,7 @@ Use Python 3.14. Python.org lists Python 3.14 as the current stable bugfix line;
 ```bash
 cp .env.example .env
 python -m pip install -e ".[dev]"
+python scripts/setup_nli_verifier.py
 python -m uvicorn backend.reliability_graph.api:app --reload --port 8000
 cd frontend
 npm install
@@ -17,7 +18,7 @@ npm run dev
 
 Open `http://localhost:5173`.
 
-Provider keys are sent only to the backend. Saved keys are encrypted before they are written to the local SQLite database, and plaintext keys are never returned to the browser.
+Provider keys are sent only to the backend. Saved keys are encrypted before they are written to the local SQLite database, and plaintext keys are never returned to the browser. Chat runs require a connected LLM provider and a ready NLI verifier; if either is missing, the app shows a setup error instead of producing a synthetic answer.
 
 Docker is optional:
 
@@ -43,7 +44,7 @@ cd frontend && npm run build
 ## Safety Defaults
 
 - The frontend never calls model providers.
-- Live provider calls are opt-in per run.
+- Production chat never falls back to local synthetic answers or fake audit outputs.
 - Runs have sample limits and user-visible cost caps.
 - The score is a diagnostic `X / 100`, not a calibrated correctness probability.
 - Provider output is treated as observable behavior only. Robustness checks do not reveal hidden reasoning.

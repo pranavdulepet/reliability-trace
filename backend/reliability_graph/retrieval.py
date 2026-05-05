@@ -221,7 +221,7 @@ def source_quality(chunk: Dict[str, Any]) -> str:
         return "high"
     if any(hint in url for hint in OFFICIAL_SOURCE_HINTS) and not _is_secondary_source(url):
         return "high"
-    if source_type in {"web_page", "web_search_result", "uploaded_document", "manual_source"}:
+    if source_type in {"web_page", "web_search_result", "uploaded_document", "manual_source", "benchmark_source"}:
         return "medium"
     return "low"
 

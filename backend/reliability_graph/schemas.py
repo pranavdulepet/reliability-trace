@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 KEY_PROVIDERS = ["openai", "anthropic", "gemini", "openrouter", "tinker"]
-RUN_PROVIDERS = ["preview", "local"] + KEY_PROVIDERS
+RUN_PROVIDERS = KEY_PROVIDERS
 SEARCH_MODES = ["auto", "always", "off"]
 
 

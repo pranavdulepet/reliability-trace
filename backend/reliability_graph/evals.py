@@ -16,6 +16,7 @@ from .pipeline.scoring import compute_reliability_score
 from .providers import build_provider
 from .providers.base import GenerateRequest, ModelMessage, ProviderError
 from .retrieval import build_chunks, text_similarity, tokenize
+from .verifier import FixtureEntailmentVerifier
 
 ProviderKeyResolver = Callable[[str], Awaitable[Optional[str]]]
 
@@ -233,7 +234,7 @@ async def run_eval_example(
         run["answer_override"] = example.answer
         run["candidate_answer_overrides"] = candidate_samples
     resolver = resolve_key or _empty_key_resolver
-    pipeline = ReliabilityPipeline(retrieval_chunks=_eval_chunks(example))
+    pipeline = ReliabilityPipeline(retrieval_chunks=_eval_chunks(example), entailment_verifier=FixtureEntailmentVerifier())
     events = []
     async for event in pipeline.run(run, resolver):
         events.append(event)
@@ -906,6 +907,7 @@ def _eval_chunks(example: EvalExample) -> List[Dict[str, Any]]:
                     "title": title,
                     "source_url": None,
                     "source_type": "benchmark_source",
+                    "source_quality": "medium",
                 }
             )
     return chunks
