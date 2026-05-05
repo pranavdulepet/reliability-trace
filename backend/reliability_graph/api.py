@@ -494,6 +494,9 @@ def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str
     documents = []
     for result in results:
         content = result["content"]
+        published_date = str(result.get("published_date") or "").strip()
+        if published_date:
+            content = "Published date: %s\n\n%s" % (published_date[:80], content)
         content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
         existing = storage.find_document_by_signature(settings.user_id, content_sha, result["url"])
         if existing:

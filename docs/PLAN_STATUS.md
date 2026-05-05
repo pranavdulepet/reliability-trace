@@ -16,6 +16,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
 - External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; safety caps remain explicit product policy.
+- RAG/source-grounding hardening for meta-claim filtering, wider per-claim evidence retrieval, structured negation, unit-aware numeric contradiction checks, and web-result published-date preservation.
 - Live provider perturbation checks for connected provider runs.
 - Security defaults: provider keys never enter frontend code, saved keys are encrypted, exports exclude plaintext keys, and the main UI requires a connected provider plus ready entailment verifier before answer generation.
 - Direct tests for graph shape, scoring behavior, provider payload safety, key storage, conversation storage, attachment-scoped retrieval, URL fetch hardening, API behavior, and provider-compatible request handling.

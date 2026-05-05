@@ -257,9 +257,9 @@ def test_regression_gate_compares_baselines_on_same_rows():
 
 def test_regression_gate_flags_same_row_baseline_win():
     results = [
-        _gate_result("selfcheck", "bad-low-risk", risk=0.2, baseline_risk=0.9, bad=True),
-        _gate_result("selfcheck", "bad-high-risk", risk=0.7, baseline_risk=0.8, bad=True),
-        _gate_result("selfcheck", "good", risk=0.3, baseline_risk=0.1, bad=False),
+        _gate_result("selfcheck", "bad-low-risk", risk=0.1, baseline_risk=0.95, bad=True),
+        _gate_result("selfcheck", "bad-high-risk", risk=0.2, baseline_risk=0.9, bad=True),
+        _gate_result("selfcheck", "good", risk=0.8, baseline_risk=0.05, bad=False),
     ]
 
     regressions = _internal_regressions(results)

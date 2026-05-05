@@ -72,6 +72,34 @@ def test_support_relation_detects_numeric_conflict():
     assert support_relation(claim, snippet) == "contradicts"
 
 
+def test_support_relation_ignores_unrelated_numbers_in_relevant_snippet():
+    claim = "Social Security beneficiaries will receive a 3.2% increase in monthly payments in 2024."
+    snippet = "Beneficiaries will receive notices of the increase in early December and can set up alerts until November 14."
+
+    assert support_relation(claim, snippet) != "contradicts"
+
+
+def test_support_relation_detects_date_conflict_with_shared_context():
+    claim = "ExampleOS 9 was released on April 3, 2026."
+    snippet = "ExampleOS 9 was released on April 2, 2026."
+
+    assert support_relation(claim, snippet) == "contradicts"
+
+
+def test_support_relation_detects_same_number_with_conflicting_units():
+    claim = "Maickel Melamed completed the Boston Marathon in 26.2 hours."
+    snippet = "Maickel Melamed completed the 26.2 miles just before 5 a.m. Tuesday."
+
+    assert support_relation(claim, snippet) == "contradicts"
+
+
+def test_tokenization_preserves_short_negation_signal():
+    claim = "The restaurant offers WiFi."
+    snippet = "The structured data says WiFi: no."
+
+    assert support_relation(claim, snippet) == "contradicts"
+
+
 def test_storage_saves_documents_and_searches_chunks(tmp_path):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()

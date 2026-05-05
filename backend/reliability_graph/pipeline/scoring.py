@@ -116,8 +116,8 @@ def compute_reliability_score(
         and int(caps.get("partial_support_claims", 0)) > 0
         and features.get("sample_overlap_stability", 1.0) <= 0.50
     ):
-        score = min(score, 50)
-        applied.append("partial source support without sample corroboration: score capped at 50")
+        score = min(score, 60)
+        applied.append("partial source support without sample corroboration: score capped at 60")
     elif (
         caps.get("evidence_required")
         and int(caps.get("partial_support_claims", 0)) > 0

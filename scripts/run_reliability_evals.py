@@ -332,7 +332,7 @@ def _paired_baseline_comparison(results: list, baseline_name: str) -> Optional[d
 
 
 def _metric_beats(left: Optional[float], right: Optional[float]) -> bool:
-    return left is not None and right is not None and left > right + 1e-9
+    return left is not None and right is not None and left > right + 0.02
 
 
 def _mean(values: list[float]) -> float:

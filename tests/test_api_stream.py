@@ -57,7 +57,7 @@ def test_run_event_stream_indexes_web_search_results(tmp_path, monkeypatch):
                     "content": "Reliability scores are diagnostic summaries, not calibrated probabilities. They help rank answers by support and uncertainty.",
                     "snippet": "Reliability scores are diagnostic summaries.",
                     "score": 0.9,
-                    "published_date": None,
+                    "published_date": "2026-05-01",
                 }
             ],
             "response_time": 0.01,
@@ -86,6 +86,8 @@ def test_run_event_stream_indexes_web_search_results(tmp_path, monkeypatch):
     assert completed["graph"]["run"]["search_used"] is True
     assert completed["graph"]["web_search"]["calls"][0]["result_count"] == 1
     assert completed["graph"]["web_search"]["documents"][0]["source_type"] == "web_search_result"
+    chunks = storage.list_document_chunks(api_module.settings.user_id, [completed["graph"]["web_search"]["documents"][0]["document_id"]])
+    assert chunks[0]["text"].startswith("Published date: 2026-05-01")
 
 
 def test_create_message_rejects_missing_provider_without_saving_user_message(tmp_path, monkeypatch):

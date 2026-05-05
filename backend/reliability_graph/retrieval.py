@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_'-]*")
+NUMBER_RE = re.compile(r"\b\d+(?:\.\d+)?\b")
 TAG_RE = re.compile(r"<[^>]+>")
 SCRIPT_RE = re.compile(r"<(script|style)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
 WHITESPACE_RE = re.compile(r"\s+")
@@ -59,6 +60,55 @@ STOPWORDS = {
 }
 
 NEGATION_TERMS = {"not", "no", "never", "false", "incorrect", "contradict", "contradicts", "cannot", "can't"}
+SHORT_SIGNAL_TOKENS = {"no"}
+UNIT_TERMS = {
+    "%",
+    "percent",
+    "percentage",
+    "dollar",
+    "dollars",
+    "usd",
+    "star",
+    "stars",
+    "rating",
+    "ratings",
+    "hour",
+    "hours",
+    "day",
+    "days",
+    "week",
+    "weeks",
+    "month",
+    "months",
+    "year",
+    "years",
+    "mile",
+    "miles",
+    "km",
+    "kilometer",
+    "kilometers",
+    "meter",
+    "meters",
+    "version",
+    "versions",
+    "release",
+    "releases",
+    "stable",
+}
+MONTH_TERMS = {
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+}
 SECONDARY_SOURCE_DOMAINS = (
     "reddit.com",
     "stackoverflow.com",
@@ -79,7 +129,14 @@ FRESHNESS_TERMS = {"current", "latest", "official", "release", "releases", "stab
 
 
 def tokenize(text: str) -> List[str]:
-    return [token.lower() for token in TOKEN_RE.findall(text) if len(token) > 2 and token.lower() not in STOPWORDS]
+    tokens = []
+    for token in TOKEN_RE.findall(text):
+        lowered = token.lower()
+        if lowered in STOPWORDS:
+            continue
+        if len(lowered) > 2 or lowered in SHORT_SIGNAL_TOKENS:
+            tokens.append(lowered)
+    return tokens
 
 
 def chunk_text(text: str, target_tokens: int = 180, overlap: int = 35) -> List[str]:
@@ -158,7 +215,7 @@ def search_chunks(query: str, chunks: List[Dict[str, Any]], limit: int = 8) -> L
 def evidence_for_claims(
     claims: List[Dict[str, Any]],
     chunks: List[Dict[str, Any]],
-    limit_per_claim: int = 2,
+    limit_per_claim: int = 3,
     min_score: float = 0.16,
 ) -> List[Dict[str, Any]]:
     evidence: List[Dict[str, Any]] = []
@@ -192,14 +249,16 @@ def support_relation(claim: str, snippet: str) -> str:
     claim_tokens = set(tokenize(claim_for_tokens))
     snippet_tokens = set(tokenize(snippet))
     overlap = len(claim_tokens & snippet_tokens) / float(len(claim_tokens) or 1)
-    claim_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", claim_lower))
-    snippet_numbers = set(re.findall(r"\b\d+(?:\.\d+)?\b", snippet_lower))
+    claim_numbers = set(NUMBER_RE.findall(claim_lower))
+    snippet_numbers = set(NUMBER_RE.findall(snippet_lower))
 
     if claim_lower.strip(". ") in snippet_lower:
         return "supports"
-    if overlap >= 0.25 and claim_numbers and snippet_numbers and not claim_numbers.issubset(snippet_numbers):
+    if _numbers_conflict(claim_lower, snippet_lower, claim_numbers, snippet_numbers, overlap):
         return "contradicts"
     if overlap >= 0.3 and len(claim_tokens & snippet_tokens) >= 3 and _has_direct_contradiction(claim_tokens, snippet_lower):
+        return "contradicts"
+    if overlap >= 0.20 and _has_structured_negative(claim_tokens, snippet_lower):
         return "contradicts"
     if claim_tokens and claim_tokens.issubset(snippet_tokens):
         return "supports"
@@ -254,6 +313,102 @@ def _has_direct_contradiction(claim_tokens: set, snippet_lower: str) -> bool:
     for match in re.finditer(r"\b(not|no|never|cannot|can't)\b(?:[^\w.!?;:]+[\w'-]+){0,5}", snippet_lower):
         window_tokens = set(tokenize(match.group(0)))
         if window_tokens & (claim_tokens - NEGATION_TERMS):
+            return True
+    return False
+
+
+def _numbers_conflict(
+    claim_lower: str,
+    snippet_lower: str,
+    claim_numbers: set,
+    snippet_numbers: set,
+    overlap: float,
+) -> bool:
+    if overlap < 0.25 or not claim_numbers or not snippet_numbers:
+        return False
+    claim_contexts = _number_contexts(claim_lower)
+    snippet_contexts = _number_contexts(snippet_lower)
+    if _same_number_unit_conflict(claim_contexts, snippet_contexts):
+        return True
+    if claim_numbers.issubset(snippet_numbers):
+        return False
+    for claim_number, claim_context, claim_marker in claim_contexts:
+        if claim_number in snippet_numbers:
+            continue
+        for snippet_number, snippet_context, snippet_marker in snippet_contexts:
+            if snippet_number in claim_numbers:
+                continue
+            shared = (claim_context & snippet_context) - UNIT_TERMS
+            if claim_marker and snippet_marker and claim_marker == snippet_marker and len(shared) >= 1:
+                return True
+            if (claim_context & MONTH_TERMS) and (snippet_context & MONTH_TERMS) and len(shared) >= 2:
+                return True
+            if (claim_context & UNIT_TERMS) and (snippet_context & UNIT_TERMS) and len(shared) >= 3:
+                return True
+    return False
+
+
+def _same_number_unit_conflict(claim_contexts: List[tuple[str, set, Optional[str]]], snippet_contexts: List[tuple[str, set, Optional[str]]]) -> bool:
+    incompatible = {
+        ("time", "distance"),
+        ("distance", "time"),
+        ("money", "rating"),
+        ("rating", "money"),
+    }
+    for claim_number, claim_context, claim_marker in claim_contexts:
+        if not claim_marker:
+            continue
+        for snippet_number, snippet_context, snippet_marker in snippet_contexts:
+            if claim_number != snippet_number or not snippet_marker:
+                continue
+            if (claim_marker, snippet_marker) in incompatible and len((claim_context & snippet_context) - UNIT_TERMS) >= 2:
+                return True
+    return False
+
+
+def _number_contexts(text: str) -> List[tuple[str, set, Optional[str]]]:
+    contexts: List[tuple[str, set, Optional[str]]] = []
+    for match in NUMBER_RE.finditer(text):
+        start, end = match.start(), match.end()
+        window_text = text[max(0, start - 90) : min(len(text), end + 90)]
+        context = {
+            token.lower()
+            for token in TOKEN_RE.findall(window_text)
+            if token.lower() not in STOPWORDS and not NUMBER_RE.fullmatch(token)
+        }
+        before = text[max(0, start - 2) : start]
+        after = text[end : min(len(text), end + 16)]
+        marker = _number_marker(before, after, context)
+        contexts.append((match.group(0), context, marker))
+    return contexts
+
+
+def _number_marker(before: str, after: str, context: set) -> Optional[str]:
+    if "%" in after[:3]:
+        return "%"
+    if "$" in before or any(term in context for term in {"dollar", "dollars", "usd"}):
+        return "money"
+    if context & {"star", "stars", "rating", "ratings"}:
+        return "rating"
+    if context & MONTH_TERMS:
+        return "date"
+    if context & {"hour", "hours", "day", "days", "week", "weeks", "month", "months", "year", "years"}:
+        return "time"
+    if context & {"mile", "miles", "km", "kilometer", "kilometers", "meter", "meters"}:
+        return "distance"
+    if context & {"version", "versions", "release", "releases", "stable"}:
+        return "version"
+    return None
+
+
+def _has_structured_negative(claim_tokens: set, snippet_lower: str) -> bool:
+    for token in claim_tokens - NEGATION_TERMS:
+        if len(token) < 4:
+            continue
+        escaped = re.escape(token)
+        if re.search(r"\b%s\b[^.!?;:]{0,24}:\s*(?:no|false|none|null)\b" % escaped, snippet_lower):
+            return True
+        if re.search(r"\b%s\b\s*[:=]\s*(?:no|false|none|null)\b" % escaped, snippet_lower):
             return True
     return False
 

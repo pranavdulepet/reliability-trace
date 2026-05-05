@@ -132,6 +132,25 @@ def test_provider_claim_json_failure_fails_run(monkeypatch):
         raise AssertionError("invalid provider claim JSON did not fail")
 
 
+def test_eval_claim_extraction_skips_source_grounding_meta_claims():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    claims = pipeline._eval_claims(
+        {
+            "answer": {
+                "final_answer": (
+                    "Based on the given passages, here are some benefits. "
+                    "Jalapenos may help with pain relief."
+                ),
+                "summary": "Jalapenos may help with pain relief.",
+            },
+            "run": base_run(answer_override="Jalapenos may help with pain relief."),
+            "question_type": "factual_qa",
+        }
+    )
+
+    assert [claim["text"] for claim in claims] == ["Jalapenos may help with pain relief"]
+
+
 def test_provider_assumption_json_failure_fails_run(monkeypatch):
     provider = FakeProvider(assumptions_raw=["not json", '{"assumptions":[]}'])
     monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)

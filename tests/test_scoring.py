@@ -110,7 +110,7 @@ def test_score_caps_uncorroborated_partial_support_as_not_reliable():
         {"evidence_required": True, "partial_support_claims": 1},
     )
 
-    assert score == 50
+    assert score == 60
     assert any("partial source support without sample corroboration" in cap for cap in caps)
 
 

@@ -469,6 +469,8 @@ class ReliabilityPipeline:
         for sentence in sentences:
             if len(claims) >= 8:
                 break
+            if self._is_meta_claim(sentence):
+                continue
             if len(tokenize(sentence)) < 5:
                 continue
             claim_type = self._claim_type(sentence)
@@ -518,6 +520,19 @@ class ReliabilityPipeline:
                 if len(tokenize(cleaned)) >= 5 and cleaned not in expanded:
                     expanded.append(cleaned)
         return expanded
+
+    def _is_meta_claim(self, text: str) -> bool:
+        lowered = re.sub(r"\s+", " ", text.lower()).strip(" .,:;")
+        meta_patterns = [
+            r"^based on (the )?(provided|given|attached|following) (passages|sources|data|structured data|context)",
+            r"^here(?:'s| is) (a|an|the)? ?(brief )?(summary|answer|overview)",
+            r"^sure[,! ]+here(?:'s| is)",
+            r"^this (summary|answer|overview) (is|provides)",
+            r"^objective overview of",
+            r"^the following (summary|overview|answer)",
+            r"^in summary$",
+        ]
+        return any(re.search(pattern, lowered) for pattern in meta_patterns)
 
     async def _extract_assumptions(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> List[Dict[str, Any]]:
         run = state["run"]
@@ -1671,6 +1686,8 @@ class ReliabilityPipeline:
                 continue
             text = str(item.get("text") or "").strip()
             if len(tokenize(text)) < 4:
+                continue
+            if self._is_meta_claim(text):
                 continue
             claim_type = str(item.get("type") or self._claim_type(text)).strip()
             importance = str(item.get("importance") or self._claim_importance(text)).strip()
