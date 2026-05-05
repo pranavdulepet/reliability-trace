@@ -268,6 +268,20 @@ a:focus-visible {
   margin: 8px 0 0;
 }
 
+.reliability-cards .score-line {
+  color: var(--text);
+  font-weight: 680;
+  margin-top: 12px;
+}
+
+.reliability-cards .score-basis,
+.reliability-cards .calibration-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin-top: 6px;
+}
+
 .message-row {
   display: flex;
   gap: 12px;

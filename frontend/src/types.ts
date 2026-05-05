@@ -306,6 +306,12 @@ export interface ReliabilityGraph {
     status: string;
     display: string;
     note: string;
+    benchmark?: {
+      label_count?: number;
+      status?: string;
+      summary?: string;
+      [key: string]: unknown;
+    };
   };
   perturbation_probe?: PerturbationProbe;
   causal_probe: PerturbationProbe;

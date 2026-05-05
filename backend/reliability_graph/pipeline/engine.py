@@ -1451,13 +1451,13 @@ class ReliabilityPipeline:
         if self.calibration_report.get("label_count", 0) <= 0:
             return {
                 "status": "uncalibrated_diagnostic",
-                "display": "Uncalibrated diagnostic score",
+                "display": "Not locally calibrated yet",
                 "note": self.calibration_report["summary"],
                 "benchmark": self.calibration_report,
             }
         return {
             "status": "local_calibration",
-            "display": "Locally calibrated diagnostic score",
+            "display": "Locally calibrated",
             "note": self.calibration_report["summary"],
             "benchmark": self.calibration_report,
         }

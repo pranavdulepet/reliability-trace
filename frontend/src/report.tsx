@@ -44,9 +44,9 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
           </p>
         </div>
         <div className="score-block">
-          <span>Diagnostic Score</span>
+          <span>Reliability score</span>
           <strong>{graph.answer.reliability_score} / 100</strong>
-          <small>{formatStatus(graph.answer.calibration_status)}</small>
+          <small>{calibrationCopy(graph)}</small>
         </div>
       </div>
       <nav className="tab-row" aria-label="Report tabs">
@@ -257,9 +257,12 @@ function CalibrationTab({ graph }: { graph: ReliabilityGraph }) {
     <div>
       <h3>{graph.calibration.display}</h3>
       <p>{graph.calibration.note}</p>
+      <p className="panel-note">
+        The score is a rule-based reliability summary from the signals below. It is not a model confidence percentage or a calibrated probability of truth.
+      </p>
       <Table
-        columns={["Feature", "Value"]}
-        rows={Object.entries(graph.features).map(([key, value]) => [key, formatNumber(value)])}
+        columns={["Signal", "Value", "Meaning"]}
+        rows={scoreFeatureRows(graph)}
       />
       {graph.score_caps.length > 0 && (
         <>
@@ -311,7 +314,9 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
       <article className={`verdict-card verdict-${meta.verdict}`}>
         <span>Final decision</span>
         <strong>{meta.verdictLabel}</strong>
-        <p>{meta.score}/100 diagnostic · {formatStatus(graph.answer.calibration_status)}</p>
+        <p className="score-line">Reliability score: {meta.score}/100</p>
+        <p className="score-basis">{scoreBasis(graph)}</p>
+        <p className="calibration-note">{calibrationCopy(graph)}</p>
       </article>
       <article>
         <span>Evidence</span>
@@ -428,8 +433,9 @@ function Table({ columns, rows }: { columns: string[]; rows: string[][] }) {
   );
 }
 
-function formatPercent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+function formatPercent(value: number | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function formatNumber(value: number): string {
@@ -444,6 +450,41 @@ function formatProvider(provider: string): string {
 
 function formatStatus(value: string): string {
   return value.replaceAll("_", " ");
+}
+
+function calibrationCopy(graph: ReliabilityGraph): string {
+  if (graph.answer.calibration_status === "local_calibration") {
+    const labels = graph.calibration.benchmark?.label_count ?? 0;
+    return labels > 0 ? `Locally calibrated with ${labels} labeled run${labels === 1 ? "" : "s"}` : "Locally calibrated";
+  }
+  return "Not calibrated yet; use the decision and evidence, not the number alone";
+}
+
+function scoreBasis(graph: ReliabilityGraph): string {
+  const contradicted = graph.claim_assessments.filter((item) => item.relation === "contradicted" || item.status === "contradicted").length;
+  if (contradicted > 0) return `Lowered by ${contradicted} contradicted checked claim${contradicted === 1 ? "" : "s"}.`;
+  if (graph.score_caps.length > 0) return `Capped: ${graph.score_caps[0]}.`;
+  const features = graph.features;
+  if (features.evidence_required >= 0.5) {
+    return `Driven by claim support ${formatPercent(features.claim_support_rate)}, source match ${formatPercent(features.retrieval_alignment_score)}, and sample agreement ${formatPercent(features.semantic_stability)}.`;
+  }
+  return `Driven mostly by sample agreement ${formatPercent(features.semantic_stability)} and overlap ${formatPercent(features.sample_overlap_stability)} because no source was required.`;
+}
+
+function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
+  const featureLabels: Array<[string, string, string]> = [
+    ["claim_support_rate", "Claim support", "Share of checked claims supported by source/verifier evidence."],
+    ["retrieval_alignment_score", "Source match", "How strongly retrieved snippets matched the extracted claims."],
+    ["source_quality_score", "Source quality", "Source provenance from metadata such as official docs, uploaded files, or lower-provenance pages."],
+    ["semantic_stability", "Meaning agreement", "Whether provider samples answered with the same meaning."],
+    ["sample_overlap_stability", "Sample overlap", "Lexical/meaning overlap between the main answer and other samples."],
+    ["retrieval_peak_score", "Best source match", "Strongest individual retrieved match."],
+    ["contradiction_rate", "Contradictions", "Share of checked claims contradicted by matched evidence."],
+    ["insufficient_evidence_rate", "Unsupported claims", "Share of checked claims not found in evidence."],
+  ];
+  return featureLabels
+    .filter(([key]) => graph.features[key] !== undefined)
+    .map(([key, label, meaning]) => [label, formatPercent(graph.features[key]), meaning]);
 }
 
 function sourceSummary(graph: ReliabilityGraph): string {
