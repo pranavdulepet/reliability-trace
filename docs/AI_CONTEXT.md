@@ -16,7 +16,7 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 - Saved keys are encrypted in backend storage and displayed only as fingerprints.
 - Production chat is provider-strict: never substitute local synthetic answers, fallback claim extraction, or heuristic claim/source judgments when provider or verifier work fails.
 - A ready local NLI entailment verifier is required for chat runs. Eval-only fixed-answer paths may use fixtures; user chat may not.
-- The reliability score is a diagnostic score, not a calibrated probability.
+- The reliability score is a benchmark-tuned diagnostic score, not a calibrated probability. Linear weights live in `configs/reliability_score_weights.json`; safety caps remain explicit policy, not learned weights.
 - Do not count trace completeness, hard-coded rubric values, or fake decision utilities as truth evidence.
 - Closed-model behavior is observable evidence only.
 - Provider perturbation output is optional behavioral evidence unless a real logprob robustness workflow is installed.
@@ -37,6 +37,7 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 - Web search routing and adapter: `backend/reliability_graph/web_search.py`
 - Benchmark report: `backend/reliability_graph/benchmarks.py`
 - External eval harness: `backend/reliability_graph/evals.py` and `scripts/run_reliability_evals.py`
+- Score-weight calibration: `scripts/calibrate_reliability_weights.py` and `configs/reliability_score_weights.json`
 - Frontend app: `frontend/src/App.tsx`
 - Frontend reliability rendering: `frontend/src/report.tsx`
 - Sample-usecase smoke harness: `scripts/smoke_usecases.py`

@@ -1,7 +1,10 @@
-from typing import Any, Dict, List, Tuple
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 
-EVIDENCE_REQUIRED_WEIGHTS = {
+DEFAULT_EVIDENCE_REQUIRED_WEIGHTS = {
     "claim_support_rate": 0.30,
     "retrieval_alignment_score": 0.20,
     "source_quality_score": 0.14,
@@ -10,7 +13,7 @@ EVIDENCE_REQUIRED_WEIGHTS = {
     "retrieval_peak_score": 0.08,
 }
 
-EVIDENCE_OPTIONAL_WEIGHTS = {
+DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS = {
     "sample_overlap_stability": 0.35,
     "semantic_stability": 0.35,
     "claim_support_rate": 0.10,
@@ -19,9 +22,64 @@ EVIDENCE_OPTIONAL_WEIGHTS = {
     "retrieval_peak_score": 0.05,
 }
 
+SCORE_WEIGHT_CONFIG_PATH = Path(
+    os.getenv(
+        "RG_SCORE_WEIGHTS_PATH",
+        str(Path(__file__).resolve().parents[3] / "configs" / "reliability_score_weights.json"),
+    )
+)
 
-def compute_reliability_score(features: Dict[str, float], caps: Dict[str, Any]) -> Tuple[int, List[str]]:
-    weights = EVIDENCE_REQUIRED_WEIGHTS if features.get("evidence_required", 1.0) >= 0.5 else EVIDENCE_OPTIONAL_WEIGHTS
+
+def _load_weight_config() -> Tuple[Dict[str, float], Dict[str, float], Dict[str, Any]]:
+    if not SCORE_WEIGHT_CONFIG_PATH.exists():
+        return (
+            dict(DEFAULT_EVIDENCE_REQUIRED_WEIGHTS),
+            dict(DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS),
+            {"source": "built_in_defaults", "path": None},
+        )
+    try:
+        data = json.loads(SCORE_WEIGHT_CONFIG_PATH.read_text(encoding="utf-8"))
+        required = _validated_weights(data.get("evidence_required_weights"), DEFAULT_EVIDENCE_REQUIRED_WEIGHTS)
+        optional = _validated_weights(data.get("evidence_optional_weights"), DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return (
+            dict(DEFAULT_EVIDENCE_REQUIRED_WEIGHTS),
+            dict(DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS),
+            {"source": "built_in_defaults_after_invalid_config", "path": str(SCORE_WEIGHT_CONFIG_PATH)},
+        )
+    metadata = {
+        "source": data.get("source") or "benchmark_tuned",
+        "path": str(SCORE_WEIGHT_CONFIG_PATH),
+        "trained_at": data.get("trained_at"),
+        "benchmark_scope": data.get("benchmark_scope"),
+    }
+    return required, optional, metadata
+
+
+def _validated_weights(raw: Any, fallback: Dict[str, float]) -> Dict[str, float]:
+    if not isinstance(raw, dict):
+        return dict(fallback)
+    weights = {key: max(0.0, float(raw.get(key, 0.0))) for key in fallback}
+    total = sum(weights.values())
+    if total <= 0:
+        return dict(fallback)
+    return {key: value / total for key, value in weights.items()}
+
+
+EVIDENCE_REQUIRED_WEIGHTS, EVIDENCE_OPTIONAL_WEIGHTS, SCORE_WEIGHT_METADATA = _load_weight_config()
+
+
+def compute_reliability_score(
+    features: Dict[str, float],
+    caps: Dict[str, Any],
+    required_weights: Optional[Dict[str, float]] = None,
+    optional_weights: Optional[Dict[str, float]] = None,
+) -> Tuple[int, List[str]]:
+    weights = (
+        (required_weights or EVIDENCE_REQUIRED_WEIGHTS)
+        if features.get("evidence_required", 1.0) >= 0.5
+        else (optional_weights or EVIDENCE_OPTIONAL_WEIGHTS)
+    )
     raw = sum(weight * _feature(features, name) for name, weight in weights.items())
     score = int(round(max(0.0, min(1.0, raw)) * 100))
     applied: List[str] = []

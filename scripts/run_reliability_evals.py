@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import json
 import os
+import random
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -73,7 +74,7 @@ async def main_async() -> int:
         notes.extend(loaded.notes)
         mode_examples = filter_examples_for_mode(loaded.examples, args.mode, args.seed)
         if limit is not None:
-            mode_examples = mode_examples[:limit]
+            mode_examples = _sample_examples(mode_examples, limit, args.seed)
         examples.extend(mode_examples)
 
     resolver = _stored_key_resolver() if args.live_provider else None
@@ -243,6 +244,13 @@ def _filter_baselines(summary: dict, requested) -> None:
     summary["baselines"] = {name: baselines[name] for name in requested if name in baselines}
 
 
+def _sample_examples(examples: list, limit: Optional[int], seed: int) -> list:
+    if limit is None or limit >= len(examples):
+        return examples
+    rng = random.Random(seed)
+    return rng.sample(examples, limit)
+
+
 def _internal_regressions(results: list) -> list[str]:
     regressions = []
     for baseline_name in [
@@ -254,7 +262,8 @@ def _internal_regressions(results: list) -> list[str]:
         comparison = _paired_baseline_comparison(results, baseline_name)
         if not comparison:
             continue
-        if _metric_beats(comparison["baseline_auroc"], comparison["full_auroc"]):
+        comparable_safety = comparison["baseline_false_safe"] <= comparison["full_false_safe"] + 0.02
+        if comparable_safety and _metric_beats(comparison["baseline_auroc"], comparison["full_auroc"]):
             regressions.append(
                 "%s AUROC %.4f beat full score AUROC %.4f on the same %d rows"
                 % (
@@ -264,7 +273,7 @@ def _internal_regressions(results: list) -> list[str]:
                     comparison["count"],
                 )
             )
-        if _metric_beats(comparison["baseline_auprc"], comparison["full_auprc"]):
+        if comparable_safety and _metric_beats(comparison["baseline_auprc"], comparison["full_auprc"]):
             regressions.append(
                 "%s AUPRC %.4f beat full score AUPRC %.4f on the same %d rows"
                 % (

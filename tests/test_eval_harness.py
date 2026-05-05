@@ -18,7 +18,7 @@ from backend.reliability_graph.evals import (
     stable_split_bucket,
     summarize_eval_results,
 )
-from scripts.run_reliability_evals import _append_result, _internal_regressions, _read_results
+from scripts.run_reliability_evals import _append_result, _internal_regressions, _read_results, _sample_examples
 
 
 def test_eval_metric_math_on_tiny_fixture():
@@ -30,6 +30,18 @@ def test_eval_metric_math_on_tiny_fixture():
     assert auroc(labels, risk_scores) == 1.0
     assert average_precision(labels, risk_scores) == 1.0
     assert round(expected_calibration_error(confidences, correctness, bins=2), 3) == 0.175
+
+
+def test_capped_eval_sampling_is_stable_and_seeded():
+    examples = list(range(20))
+
+    first = _sample_examples(examples, 5, 7)
+    second = _sample_examples(examples, 5, 7)
+    different_seed = _sample_examples(examples, 5, 8)
+
+    assert first == second
+    assert first != examples[:5]
+    assert first != different_seed
 
 
 def test_ragtruth_label_mapping():
@@ -256,6 +268,17 @@ def test_regression_gate_flags_same_row_baseline_win():
     assert any("beat full score" in item for item in regressions)
 
 
+def test_regression_gate_does_not_block_on_unsafe_baseline_win():
+    results = [
+        _gate_result("selfcheck", "bad-ranked-high", risk=0.6, baseline_risk=0.95, bad=True),
+        _gate_result("selfcheck", "bad-false-safe", risk=0.4, baseline_risk=0.2, bad=True),
+        _gate_result("selfcheck", "good-a", risk=0.5, baseline_risk=0.1, bad=False),
+        _gate_result("selfcheck", "good-b", risk=0.45, baseline_risk=0.1, bad=False),
+    ]
+
+    assert _internal_regressions(results) == []
+
+
 def _gate_result(benchmark: str, example_id: str, risk: float, baseline_risk: float, bad: bool) -> dict:
     return {
         "benchmark": benchmark,
@@ -269,4 +292,5 @@ def _gate_result(benchmark: str, example_id: str, risk: float, baseline_risk: fl
             "false_safe": bad and risk <= 0.25,
             "selfcheck_ngram_risk": baseline_risk,
         },
+        "graph": {"evidence": [{"relevance_score": 1.0 - risk}]},
     }

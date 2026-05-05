@@ -15,6 +15,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Research router with quiet Auto search, manual On/Off override, Tavily-backed web retrieval, source dedupe, search activity, citations, and graph fields for search mode/search use.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
+- External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; safety caps remain explicit product policy.
 - Live provider perturbation checks for connected provider runs.
 - Security defaults: provider keys never enter frontend code, saved keys are encrypted, exports exclude plaintext keys, and the main UI requires a connected provider plus ready entailment verifier before answer generation.
 - Direct tests for graph shape, scoring behavior, provider payload safety, key storage, conversation storage, attachment-scoped retrieval, URL fetch hardening, API behavior, and provider-compatible request handling.
@@ -26,7 +27,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - A downloaded production verifier model in every local environment; run `python scripts/setup_nli_verifier.py` after installing dependencies.
 - Full benchmark calibration of the provider+NLI claim verifier on large held-out runs.
 - Full logprob-based robustness measurements.
-- Large empirical benchmark calibration for score quality, risk coverage, and ablations.
+- Large full-dataset empirical calibration for score quality, risk coverage, and ablations beyond the current official-style dev calibration.
 - Hosted product capabilities: auth, workspaces, billing, rate limits, object storage, managed Postgres, audit logs, and admin controls.
 - Binary/PDF document extraction and provider-backed embedding options.
 - Provider-returned reasoning traces beyond observable prompts, outputs, tools, and run events.

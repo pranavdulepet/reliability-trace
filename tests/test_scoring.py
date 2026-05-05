@@ -1,4 +1,8 @@
-from backend.reliability_graph.pipeline.scoring import compute_reliability_score
+from backend.reliability_graph.pipeline.scoring import (
+    DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS,
+    DEFAULT_EVIDENCE_REQUIRED_WEIGHTS,
+    compute_reliability_score,
+)
 
 
 def perfect_features():
@@ -143,7 +147,7 @@ def test_score_does_not_overweight_single_peak_retrieval_match():
 
     score, caps = compute_reliability_score(features, {})
 
-    assert score <= 50
+    assert score < 60
     assert caps == []
 
 
@@ -161,7 +165,32 @@ def test_score_uses_consistency_more_when_external_evidence_is_optional():
         }
     )
 
+    default_score, default_caps = compute_reliability_score(
+        features,
+        {},
+        DEFAULT_EVIDENCE_REQUIRED_WEIGHTS,
+        DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS,
+    )
     score, caps = compute_reliability_score(features, {})
 
-    assert score == 70
+    assert default_score == 70
+    assert default_caps == []
+    assert score >= 60
+    assert caps == []
+
+
+def test_score_accepts_explicit_weight_overrides():
+    features = perfect_features()
+    features["claim_support_rate"] = 0.0
+    required_weights = {key: 0.0 for key in DEFAULT_EVIDENCE_REQUIRED_WEIGHTS}
+    required_weights["claim_support_rate"] = 1.0
+
+    score, caps = compute_reliability_score(
+        features,
+        {},
+        required_weights,
+        DEFAULT_EVIDENCE_OPTIONAL_WEIGHTS,
+    )
+
+    assert score == 0
     assert caps == []

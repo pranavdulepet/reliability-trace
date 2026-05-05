@@ -17,6 +17,14 @@ Use a live provider slice only when you want end-to-end behavior:
 python scripts/run_reliability_evals.py --benchmark simpleqa --mode dev --max-live 10 --live-provider tinker
 ```
 
+Fit score weights from a dev eval run:
+
+```bash
+python scripts/calibrate_reliability_weights.py --input data/evals/runs/<dev-run>/results.jsonl --trials 4000 --seed 7
+```
+
+This writes `configs/reliability_score_weights.json`. The script fits only the linear signal weights. It does not learn or weaken safety caps, because caps encode product risk policy for false-safe failures.
+
 The script never prints API keys. Outputs are written to:
 
 - `results.jsonl`: one graph-backed row per example.
@@ -54,9 +62,13 @@ Use dev for tuning. Use test/full only after fixes pass dev gates.
 - SelfCheckGPT adds sentence NonFact AUC-PR, sentence Factual AUC-PR, and passage Pearson/Spearman.
 - SimpleQA uses deterministic grading first; live provider grading is used only for ambiguous live answers when configured.
 
+## Score Weight Calibration
+
+The tracked score-weight config is a versioned benchmark-tuned diagnostic. You do not need to refit it on every app launch. Refit when scoring features or caps change, provider/verifier/retrieval/search behavior changes materially, the benchmark mix changes, or enough local user labels exist to justify a new local calibration. Always tune on dev and then report held-out test/full results.
+
 ## Baselines
 
-Reports include same-data baselines: random/prior, claim-support-only, retrieval lexical support, sample-consistency-only, SelfCheck n-gram, and the full ReliabilityGraph score. Use `--fail-on-regression` to fail the command when the full score loses AUROC to an internal non-random baseline.
+Reports include same-data baselines: random/prior, claim-support-only, retrieval lexical support, sample-consistency-only, SelfCheck n-gram, and the full ReliabilityGraph score. Use `--fail-on-regression` to fail the command when the full score loses AUROC/AUPRC to an internal non-random baseline with comparable false-safe rate, or when the full score has materially worse false-safe rate. A rank-only baseline that marks many bad answers as safe is reported, but it is not treated as a safe replacement for the product score.
 
 ## Limits
 

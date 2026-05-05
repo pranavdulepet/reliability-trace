@@ -1,0 +1,86 @@
+{
+  "benchmark_scope": "official-style fixed-answer dev evals",
+  "evidence_optional_weights": {
+    "claim_support_rate": 0.124477,
+    "retrieval_alignment_score": 0.153191,
+    "retrieval_peak_score": 0.038016,
+    "sample_overlap_stability": 0.297763,
+    "semantic_stability": 0.363299,
+    "source_quality_score": 0.023255
+  },
+  "evidence_required_weights": {
+    "claim_support_rate": 0.111001,
+    "retrieval_alignment_score": 0.346375,
+    "retrieval_peak_score": 0.075973,
+    "sample_overlap_stability": 0.068381,
+    "semantic_stability": 0.320629,
+    "source_quality_score": 0.07764
+  },
+  "git_sha": "469f11340ca505825263d8970bf0af5c1a0f095c",
+  "input": "data/evals/runs/20260505_120920/results.jsonl",
+  "limitations": "These weights are benchmark-tuned diagnostics, not a probability calibration. Held-out evals and real user labels remain required before making stronger calibration claims.",
+  "metrics": {
+    "default_guard": {
+      "auprc": 0.7832,
+      "auroc": 0.8512,
+      "bad_count": 53,
+      "brier": 0.2108,
+      "count": 114,
+      "ece": 0.2858,
+      "false_safe_rate": 0.0,
+      "mean_score": 0.4482
+    },
+    "default_train": {
+      "auprc": 0.7729,
+      "auroc": 0.8712,
+      "bad_count": 254,
+      "brier": 0.2092,
+      "count": 570,
+      "ece": 0.2426,
+      "false_safe_rate": 0.0,
+      "mean_score": 0.4394
+    },
+    "guard": {
+      "auprc": 0.8763,
+      "auroc": 0.8664,
+      "bad_count": 53,
+      "brier": 0.2017,
+      "count": 114,
+      "ece": 0.2381,
+      "false_safe_rate": 0.0,
+      "mean_score": 0.4323
+    },
+    "train": {
+      "auprc": 0.8986,
+      "auroc": 0.9036,
+      "bad_count": 254,
+      "brier": 0.1951,
+      "count": 570,
+      "ece": 0.2301,
+      "false_safe_rate": 0.0,
+      "mean_score": 0.4261
+    },
+    "tune": {
+      "auprc": 0.9064,
+      "auroc": 0.9134,
+      "bad_count": 201,
+      "brier": 0.1935,
+      "count": 456,
+      "ece": 0.2343,
+      "false_safe_rate": 0.0,
+      "mean_score": 0.4246
+    },
+    "validation": null
+  },
+  "objective": "Maximize bad-answer risk ranking AUROC/AUPRC with a false-safe penalty. Only linear signal weights are fitted; safety caps remain hand-audited policy.",
+  "rerun_when": [
+    "scoring features or caps change",
+    "provider, verifier, retrieval, or search behavior changes materially",
+    "benchmark mix changes",
+    "enough real user labels are collected for local calibration"
+  ],
+  "schema_version": 1,
+  "source": "benchmark_tuned",
+  "trained_at": "2026-05-05T12:12:21.118249+00:00",
+  "validation_input": null
+}
