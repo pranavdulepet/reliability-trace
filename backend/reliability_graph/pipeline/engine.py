@@ -272,7 +272,7 @@ class ReliabilityPipeline:
                 prompt = self._candidate_prompt(run["question"], index, context, conversation_context)
                 response = None
                 answer_text = ""
-                answer_token_budget = 950 if index == 0 else 520
+                answer_token_budget = 1200 if index == 0 else 650
                 for attempt in range(2):
                     attempt_prompt = prompt
                     if attempt == 1:
@@ -283,8 +283,9 @@ class ReliabilityPipeline:
                                 role="system",
                                 content=(
                                     "Generate one candidate answer for a reliability audit. "
-                                    "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning. "
-                                    "Do not say you are using snippets, context, sources, or attempting an answer."
+                                    "Answer the user directly, concisely, and completely. State uncertainty when relevant. "
+                                    "Do not reveal or invent private reasoning. Do not say you are using snippets, context, sources, or attempting an answer. "
+                                    "Do not introduce unrelated products, protocols, or implementation patterns unless the user asked for them or the evidence makes them central."
                                 ),
                             ),
                             ModelMessage(role="user", content=attempt_prompt),
@@ -373,11 +374,11 @@ class ReliabilityPipeline:
 
     def _candidate_prompt(self, question: str, index: int, context: str = "", conversation_context: str = "") -> str:
         variants = [
-            "Answer the question with a cautious reliability mindset:",
-            "Answer the question while emphasizing risks and uncertainty:",
-            "Answer the question while preserving dissenting possibilities:",
             "Answer the question as a concise technical advisor:",
-            "Answer the question and list what would change the answer:",
+            "Answer the question with a cautious reliability mindset:",
+            "Answer the question while emphasizing practical tradeoffs:",
+            "Answer the question while preserving important uncertainty:",
+            "Answer the question and include what would change the recommendation:",
         ]
         parts = [variants[index % len(variants)]]
         if conversation_context:
@@ -392,6 +393,11 @@ class ReliabilityPipeline:
                 + context
             )
         parts.append("Question:\n" + question)
+        parts.append(
+            "Write the final answer in a clean, useful structure. Prefer short paragraphs or bullets. "
+            "For a product decision, include: bottom line, when it helps, risks, and what to validate before adopting. "
+            "Avoid filler, vague claims, and tangents."
+        )
         return (
             "\n\n".join(parts)
         )
@@ -2298,9 +2304,14 @@ class ReliabilityPipeline:
         elif external_evidence and not_found:
             evidence_status = "Sources support some claims, but at least one checked claim was not found."
         elif external_evidence and partially_supported:
-            evidence_status = "Sources partially support the answer; some claims need stronger support."
+            partial_count = len(partially_supported)
+            direct_count = len(supported)
+            evidence_status = (
+                "Sources directly support %d checked claim%s and partially support %d."
+                % (direct_count, "" if direct_count == 1 else "s", partial_count)
+            )
         elif external_evidence and supported:
-            evidence_status = "Attached or fetched sources support the main checked claims."
+            evidence_status = "Sources directly support the checked claims."
         elif self.retrieval_chunks:
             evidence_status = "Sources were available, but none matched the answer's claims strongly enough."
         elif not evidence_required:
@@ -2326,6 +2337,14 @@ class ReliabilityPipeline:
             verdict_reason = "The answer has a contradiction, unsupported current/factual claims, or a robustness flip that can change the conclusion."
         elif verdict == "rely":
             verdict_reason = "The main checked claims have source support, samples are reasonably consistent, and no blocking contradiction was found."
+        elif partially_supported:
+            verdict_reason = "%d checked claim%s only %s partial source support, so the answer is useful but should be verified before acting." % (
+                len(partially_supported),
+                "" if len(partially_supported) == 1 else "s",
+                "has" if len(partially_supported) == 1 else "have",
+            )
+        elif state["score_caps"]:
+            verdict_reason = "The answer may be useful, but risk caps lowered the reliability score: %s." % state["score_caps"][0]
         else:
             verdict_reason = "The answer may be useful, but evidence, calibration, or robustness signals are not strong enough for unqualified reliance."
 
@@ -2335,6 +2354,7 @@ class ReliabilityPipeline:
             contradicted,
             high_unsupported,
             source_gap_claims,
+            partially_supported,
             no_source_factual,
             perturbation_flip,
         )
@@ -2345,14 +2365,18 @@ class ReliabilityPipeline:
             no_source_factual,
             perturbation_flip,
         )
-        next_action = self._next_best_action(state, contradicted, no_source_factual, provider_error)
-        source_limitations = self._source_limitations(state, external_evidence, not_found, contradicted)
+        next_action = self._next_best_action(state, contradicted, partially_supported, no_source_factual, provider_error)
+        source_limitations = self._source_limitations(state, external_evidence, not_found, contradicted, partially_supported)
 
         positive = []
         if external_evidence and checkable_assessments:
+            support_phrase = "%d direct, %d partial, %d checked" % (
+                len(supported),
+                len(partially_supported),
+                len(checkable_assessments),
+            )
             positive.append(
-                "%d of %d checked claims have direct or partial source support"
-                % (len(supported) + len(partially_supported), len(checkable_assessments))
+                "Claim support: %s" % support_phrase
             )
         if state["semantic_stability"] >= 0.55:
             positive.append("Independent samples mostly agree at the meaning level")
@@ -2366,6 +2390,8 @@ class ReliabilityPipeline:
             negative.append("%d checked claim%s contradicted by matched evidence" % (len(contradicted), "" if len(contradicted) == 1 else "s"))
         if high_unsupported:
             negative.append("%d high-impact claim%s lacked direct source support" % (len(high_unsupported), "" if len(high_unsupported) == 1 else "s"))
+        elif partially_supported:
+            negative.append("%d checked claim%s only had partial source support" % (len(partially_supported), "" if len(partially_supported) == 1 else "s"))
         elif not external_evidence and not evidence_required:
             negative.append("No external source was used, so factual details remain unverified")
         if state["semantic_stability"] < 0.55:
@@ -2399,6 +2425,7 @@ class ReliabilityPipeline:
         contradicted: List[Dict[str, Any]],
         high_unsupported: List[Dict[str, Any]],
         not_found: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
         no_source_factual: bool,
         perturbation_flip: bool,
     ) -> str:
@@ -2412,6 +2439,9 @@ class ReliabilityPipeline:
         if high_unsupported:
             claim = claims_by_id.get(high_unsupported[0]["claim_id"], {})
             return "A high-impact claim lacks direct source support: %s" % claim.get("text", "a checked claim")
+        if partially_supported:
+            claim = claims_by_id.get(partially_supported[0]["claim_id"], {})
+            return "A checked claim is only partially supported by the retrieved snippets: %s" % claim.get("text", "a checked claim")
         if state["semantic_stability"] < 0.55:
             return "Generated samples did not converge cleanly on one meaning."
         if not_found:
@@ -2447,6 +2477,7 @@ class ReliabilityPipeline:
         self,
         state: Dict[str, Any],
         contradicted: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
         no_source_factual: bool,
         provider_error: Optional[str],
     ) -> str:
@@ -2456,6 +2487,8 @@ class ReliabilityPipeline:
             return "Use this as preparation only; verify with a qualified professional or primary source before acting."
         if contradicted:
             return "Open the contradicted claim and source snippet before relying on the answer."
+        if partially_supported:
+            return "Open Evidence and review the partially supported claim before acting on this."
         if no_source_factual:
             route = (state["run"].get("web_search") or {}).get("route") or {}
             calls = (state["run"].get("web_search") or {}).get("calls") or []
@@ -2466,7 +2499,7 @@ class ReliabilityPipeline:
             return "Attach a reliable source or URL and rerun before relying on the factual answer."
         if not self._has_external_evidence(state["evidence"]):
             return "Use as a general answer; attach or search sources if factual precision matters."
-        return "Use the answer with the reliability cards and source snippets kept visible."
+        return "Use the answer, and open Evidence if the decision is costly or high impact."
 
     def _source_limitations(
         self,
@@ -2474,6 +2507,7 @@ class ReliabilityPipeline:
         external_evidence: List[Dict[str, Any]],
         not_found: List[Dict[str, Any]],
         contradicted: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
     ) -> str:
         if not external_evidence and not self.retrieval_chunks and not self._evidence_required_for_score(state):
             return "No external source was used because this answer did not require grounding by default."
@@ -2485,6 +2519,8 @@ class ReliabilityPipeline:
             return "At least one source match contradicts the answer, so source support is mixed."
         if not_found:
             return "Source support covers only part of the answer; unsupported claims remain listed in details."
+        if partially_supported:
+            return "Some claims are relevant to the sources but not fully entailed by the snippets."
         return "Source support is limited to the files, URLs, and web results used for this message."
 
     def _citations(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:

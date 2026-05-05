@@ -280,6 +280,45 @@ def test_graph_validation_rejects_missing_reliability_fields(monkeypatch):
         raise AssertionError("missing reliability fields did not fail graph validation")
 
 
+def test_reliability_summary_names_partial_support_without_generic_action():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    state = {
+        "run": base_run(
+            question="Explain retrieval-augmented generation to a product manager.",
+            web_search={"route": {"route": "web_search"}, "calls": []},
+        ),
+        "question_type": "explanation_qa",
+        "claims": [
+            {"claim_id": "c1", "text": "RAG retrieves data before answering.", "importance": "high"},
+            {"claim_id": "c2", "text": "RAG response quality depends on source quality.", "importance": "high"},
+        ],
+        "claim_assessments": [
+            {"claim_id": "c1", "status": "supported", "relation": "supported"},
+            {"claim_id": "c2", "status": "partially_supported", "relation": "partially_supported"},
+        ],
+        "evidence": [
+            {
+                "evidence_id": "e1",
+                "claim_id": "c1",
+                "source_type": "web_search_result",
+                "source_quality": "medium",
+            }
+        ],
+        "perturbation_probe": {"available": True, "results": []},
+        "provider_error": None,
+        "structured_analysis_error": None,
+        "semantic_stability": 0.67,
+        "score": 60,
+        "score_caps": ["partial source support without sample corroboration: score capped at 60"],
+    }
+
+    summary = pipeline._reliability_summary(state)
+
+    assert "partially support 1" in summary["answer"]["evidence_status"]
+    assert "partially supported claim" in summary["answer"]["next_best_action"]
+    assert "reliability cards" not in summary["answer"]["next_best_action"].lower()
+
+
 def test_eval_claim_extraction_skips_source_grounding_meta_claims():
     pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
     claims = pipeline._eval_claims(

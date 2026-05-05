@@ -105,27 +105,32 @@ function IssuesTab({ graph }: { graph: ReliabilityGraph }) {
   if (!meta.complete) {
     return <p className="empty-state">Reliability analysis incomplete: {meta.incompleteReason}</p>;
   }
+  const issues = reliabilityIssues(graph);
+  const supportingSignals = uniqueLines(graph.answer.top_positive_signals).slice(0, 3);
   return (
-    <div className="split-columns">
+    <div className="issue-panel">
       <section>
         <h3>What to check first</h3>
-        <p>{meta.reason}</p>
-        <p>{meta.uncertainty}</p>
-        <p>{meta.nextAction}</p>
-        {graph.score_caps.length > 0 && (
-          <>
-            <h3>Score caps</h3>
-            <ul>{graph.score_caps.map((cap) => <li key={cap}>{cap}</li>)}</ul>
-          </>
+        {issues.length === 0 ? (
+          <p className="empty-state">No blocking reliability issue was found. The score still is not a truth guarantee.</p>
+        ) : (
+          <ol className="issue-priority-list">
+            {issues.map((issue) => (
+              <li key={issue.title}>
+                <strong>{issue.title}</strong>
+                <span>{issue.detail}</span>
+              </li>
+            ))}
+          </ol>
         )}
       </section>
       <section>
-        <h3>Signals</h3>
-        <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-        {graph.answer.top_positive_signals.length > 0 && (
+        <h3>Next step</h3>
+        <p>{cleanNextAction(meta.nextAction ?? "", graph)}</p>
+        {supportingSignals.length > 0 && (
           <>
             <h3>Supporting signals</h3>
-            <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
+            <ul>{supportingSignals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
           </>
         )}
       </section>
@@ -139,7 +144,7 @@ function EvidenceReviewTab({ graph }: { graph: ReliabilityGraph }) {
   const claimRows = graph.claims
     .map((claim) => ({ claim, assessment: assessments.get(claim.claim_id) }))
     .sort((left, right) => claimRiskRank(left.assessment, left.claim.checkability) - claimRiskRank(right.assessment, right.claim.checkability));
-  const evidenceGroups = groupedEvidence(externalEvidence(graph));
+  const evidenceGroups = groupedEvidence(graph);
 
   return (
     <div className="evidence-review">
@@ -166,8 +171,8 @@ function EvidenceReviewTab({ graph }: { graph: ReliabilityGraph }) {
                     <span>{formatStatus(claim.importance)} importance</span>
                     <span>{methodLabel(assessment, relation)}</span>
                   </div>
-                  <details>
-                    <summary>Why and source</summary>
+                  <details className="claim-detail" open={relation === "contradicted" || relation === "not_found"}>
+                    <summary>{relation === "supported" ? "View evidence" : "Why this matters"}</summary>
                     <p>{assessment?.why ?? assessment?.explanation ?? relationExplanation(relation)}</p>
                     <p>{assessment?.source_limit ?? evidenceLimitText(relation, matchedEvidence.length)}</p>
                     {matchedEvidence.length > 0 && (
@@ -213,7 +218,7 @@ function EvidenceReviewTab({ graph }: { graph: ReliabilityGraph }) {
                   </div>
                   <RelationPill relation={group.relation} />
                 </header>
-                {group.snippets[0] && <p>{group.snippets[0]}</p>}
+                {group.snippets[0] && <p>{shortText(group.snippets[0], 420)}</p>}
               </article>
             ))}
           </div>
@@ -588,20 +593,81 @@ function formatStatus(value: string): string {
   return value.replaceAll("_", " ");
 }
 
-function reliabilityMetrics(graph: ReliabilityGraph): Array<{ label: string; value: string }> {
-  const external = externalEvidence(graph);
-  const groupedSources = groupedEvidence(external);
+function supportBreakdown(graph: ReliabilityGraph) {
   const checkedAssessments = graph.claim_assessments.filter((assessment) => !["not_checkable", "unassessed"].includes(claimRelation(assessment)));
-  const supported = checkedAssessments.filter((assessment) => {
-    const relation = claimRelation(assessment);
-    return relation === "supported" || relation === "partially_supported";
-  }).length;
-  return [
+  const direct = checkedAssessments.filter((assessment) => claimRelation(assessment) === "supported").length;
+  const partial = checkedAssessments.filter((assessment) => claimRelation(assessment) === "partially_supported").length;
+  const contradicted = checkedAssessments.filter((assessment) => claimRelation(assessment) === "contradicted").length;
+  const notFound = checkedAssessments.filter((assessment) => ["not_found", "insufficient_evidence"].includes(claimRelation(assessment))).length;
+  return {
+    total: checkedAssessments.length,
+    direct,
+    partial,
+    contradicted,
+    unsupported: contradicted + notFound,
+    notFound,
+  };
+}
+
+function reliabilityIssues(graph: ReliabilityGraph): Array<{ title: string; detail: string }> {
+  const meta = answerMeta(graph);
+  const support = supportBreakdown(graph);
+  const issues: Array<{ title: string; detail: string }> = [];
+  if (support.contradicted > 0) {
+    issues.push({
+      title: `${support.contradicted} contradicted claim${support.contradicted === 1 ? "" : "s"}`,
+      detail: "Review the conflicting source snippet before relying on the answer.",
+    });
+  }
+  if (support.notFound > 0) {
+    issues.push({
+      title: `${support.notFound} claim${support.notFound === 1 ? " was" : "s were"} not found in sources`,
+      detail: "The answer includes source-checkable claims that retrieval did not verify.",
+    });
+  }
+  if (support.partial > 0) {
+    issues.push({
+      title: `${support.partial} partially supported claim${support.partial === 1 ? "" : "s"}`,
+      detail: "The sources are relevant, but they do not fully establish the claim wording.",
+    });
+  }
+  if ((graph.features.semantic_stability ?? graph.disagreement.semantic_stability) < 0.55) {
+    issues.push({
+      title: "Low sample agreement",
+      detail: "Different candidate answers did not converge on one meaning.",
+    });
+  }
+  for (const cap of uniqueLines(graph.score_caps)) {
+    issues.push({
+      title: "Score cap",
+      detail: cap,
+    });
+  }
+  if (issues.length === 0 && meta.verdict !== "rely") {
+    issues.push({
+      title: "Use caution",
+      detail: meta.reason || "The decision is cautious because the available signals are not strong enough for unqualified reliance.",
+    });
+  }
+  return issues.slice(0, 6);
+}
+
+function uniqueLines(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function reliabilityMetrics(graph: ReliabilityGraph): Array<{ label: string; value: string }> {
+  const groupedSources = groupedEvidence(graph);
+  const support = supportBreakdown(graph);
+  const metrics = [
     { label: "sources", value: String(groupedSources.length) },
-    { label: "claims checked", value: String(checkedAssessments.length) },
-    { label: "supported", value: `${supported}/${checkedAssessments.length || graph.claim_assessments.length || graph.claims.length || 0}` },
-    { label: "sample agreement", value: formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability) },
+    { label: "claims checked", value: String(support.total) },
+    { label: "direct support", value: `${support.direct}/${support.total || 0}` },
   ];
+  if (support.partial > 0) metrics.push({ label: "partial claims", value: String(support.partial) });
+  if (support.unsupported > 0) metrics.push({ label: "not found", value: String(support.unsupported) });
+  metrics.push({ label: "sample agreement", value: formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability) });
+  return metrics;
 }
 
 function scoreStatus(graph: ReliabilityGraph): string {
@@ -613,14 +679,30 @@ function scoreStatus(graph: ReliabilityGraph): string {
 
 function reliabilityOneLine(graph: ReliabilityGraph): string {
   const meta = answerMeta(graph);
-  const evidence = shortText(meta.evidenceStatus ?? "Evidence status was not returned.", 150);
   const uncertainty = shortText(meta.uncertainty ?? "Main uncertainty was not returned.", 150);
+  const support = supportBreakdown(graph);
+  const contradicted = graph.claim_assessments.filter((item) => claimRelation(item) === "contradicted").length;
+  if (contradicted > 0) return `${contradicted} checked claim${contradicted === 1 ? "" : "s"} conflict with available evidence. Main risk: ${uncertainty}`;
+  if (support.total > 0 && support.unsupported > 0) {
+    return `Sources support ${support.direct + support.partial}/${support.total} checked claims; ${support.unsupported} ${support.unsupported === 1 ? "claim was" : "claims were"} not found. Check: ${uncertainty}`;
+  }
+  if (support.total > 0 && support.partial > 0) {
+    return `Sources directly support ${support.direct}/${support.total} checked claims and partially support ${support.partial}. Review the partial claims before acting.`;
+  }
+  if (support.total > 0 && support.direct === support.total) {
+    return `Sources directly support all ${support.total} checked claims. Remaining uncertainty: ${uncertainty}`;
+  }
+  const evidence = shortText(meta.evidenceStatus ?? "Evidence status was not returned.", 150);
   if (meta.verdict === "do_not_rely") return `${evidence} Main risk: ${uncertainty}`;
   if (meta.verdict === "rely") return `${evidence} Remaining uncertainty: ${uncertainty}`;
   return `${evidence} Check: ${uncertainty}`;
 }
 
 function cleanNextAction(nextAction: string, graph: ReliabilityGraph): string {
+  const support = supportBreakdown(graph);
+  if (support.partial > 0 && !nextAction.toLowerCase().includes("partial")) {
+    return `Open Evidence and review ${support.partial} partially supported claim${support.partial === 1 ? "" : "s"} before acting.`;
+  }
   const genericPatterns = [
     "use the answer with the reliability cards and source snippets kept visible",
     "use the answer with the reliability cards",
@@ -738,7 +820,9 @@ function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {
   return graph.evidence.filter((item) => item.source_type !== "system_trace" && item.source_type !== "internal_policy");
 }
 
-function groupedEvidence(evidence: EvidenceItem[]) {
+function groupedEvidence(graph: ReliabilityGraph) {
+  const evidence = externalEvidence(graph);
+  const assessmentByClaim = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
   const groups = new Map<
     string,
     {
@@ -758,6 +842,7 @@ function groupedEvidence(evidence: EvidenceItem[]) {
     const key = item.source_url || `${item.source_title}:${item.source_type}`;
     const existing = groups.get(key);
     const score = Number(item.relevance_score ?? 0);
+    const relation = sourceRelation(item, assessmentByClaim.get(item.claim_id));
     if (!existing) {
       groups.set(key, {
         key,
@@ -766,7 +851,7 @@ function groupedEvidence(evidence: EvidenceItem[]) {
         type: item.source_type,
         date: item.source_date ?? "not dated",
         quality: item.source_quality,
-        relation: item.support_relation,
+        relation,
         matches: 1,
         snippets: item.snippet ? [item.snippet] : [],
         bestScore: score,
@@ -776,7 +861,7 @@ function groupedEvidence(evidence: EvidenceItem[]) {
     existing.matches += 1;
     existing.bestScore = Math.max(existing.bestScore, score);
     if (qualityRank(item.source_quality) > qualityRank(existing.quality)) existing.quality = item.source_quality;
-    if (relationRank(item.support_relation) > relationRank(existing.relation)) existing.relation = item.support_relation;
+    if (relationRank(relation) > relationRank(existing.relation)) existing.relation = relation;
     if (item.snippet && !existing.snippets.includes(item.snippet) && existing.snippets.length < 2) {
       existing.snippets.push(item.snippet);
     }
@@ -788,10 +873,20 @@ function groupedEvidence(evidence: EvidenceItem[]) {
   });
 }
 
+function sourceRelation(item: EvidenceItem, assessment: ClaimAssessment | undefined): string {
+  const relation = claimRelation(assessment);
+  if (["supported", "partially_supported", "contradicted", "not_found"].includes(relation)) return relation;
+  if (item.support_relation === "supports") return "supported";
+  if (item.support_relation === "partially_supports") return "partially_supported";
+  if (item.support_relation === "contradicts") return "contradicted";
+  return item.support_relation || "unassessed";
+}
+
 function relationRank(relation: string): number {
-  if (relation === "contradicts") return 4;
-  if (relation === "supports") return 3;
-  if (relation === "partially_supports") return 2;
+  if (relation === "contradicted" || relation === "contradicts") return 4;
+  if (relation === "not_found" || relation === "insufficient_evidence") return 3;
+  if (relation === "partially_supported" || relation === "partially_supports") return 2;
+  if (relation === "supported" || relation === "supports") return 1;
   return 1;
 }
 
