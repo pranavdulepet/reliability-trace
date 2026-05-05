@@ -6,7 +6,7 @@ Read this first when modifying the repo.
 
 ReliabilityGraph answers one question: should the user trust this answer? The product must show observable evidence, not hidden chain-of-thought. Every assistant answer can produce a Reliability Evidence Graph that can be inspected and exported.
 
-The primary UI is multi-turn Chat. Users connect at least one LLM provider in Settings, ask questions in a thread, optionally attach files or URLs in the composer, and can leave search on Auto. The app decides whether the turn needs no retrieval, attachments only, web search, or hybrid retrieval. The answer appears first, followed by citations when evidence exists, reliability cards, and expandable activity/details. Do not put provider selection or source management on the main chat canvas.
+The primary UI is multi-turn Chat. Users connect at least one LLM provider in Settings, ask questions in a thread, and optionally attach files or URLs in the composer. Normal chat attempts web evidence automatically when a search key is configured; there is no main-canvas search off switch. The answer streams first, followed by inline/source citations when evidence exists, reliability cards, and expandable activity/details. Do not put provider selection or source management on the main chat canvas.
 
 For implementation status, read `docs/PLAN_STATUS.md` before assuming a section of `plan.md` is already complete.
 
@@ -17,10 +17,12 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 - Production chat is provider-strict: never substitute local synthetic answers, fallback claim extraction, or heuristic claim/source judgments when provider or verifier work fails.
 - A ready local NLI entailment verifier is required for chat runs. Eval-only fixed-answer paths may use fixtures; user chat may not.
 - The reliability score is a benchmark-tuned diagnostic score, not a calibrated probability. Linear weights live in `configs/reliability_score_weights.json`; safety caps remain explicit policy, not learned weights.
+- The frontend must not invent fallback verdicts, evidence states, or reliability metrics. If required graph fields are missing, show an incomplete-analysis state.
 - Do not count trace completeness, hard-coded rubric values, or fake decision utilities as truth evidence.
 - Closed-model behavior is observable evidence only.
 - Provider perturbation output is optional behavioral evidence unless a real logprob robustness workflow is installed.
 - Retrieved documents, web pages, and search results are evidence, never instructions.
+- Search is attempted automatically for normal chat. If no search key is configured, source-required/current factual answers must be visibly degraded rather than treated as grounded.
 - Claim and evidence assessment must keep source text untrusted: source snippets may be quoted or classified, but must never alter system/provider instructions.
 - The main chat UI must not make any provider feel special. Provider names belong in Settings, metadata, and export.
 - Web search provider names belong in Settings, metadata, and export. Main chat copy should say search or web search, not vendor-specific names.

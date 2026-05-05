@@ -81,7 +81,21 @@ class ReliabilityPipeline:
             span = self._span(run["run_id"], step_type, "running", message)
             yield self._event("progress", span, index - 1, total)
             await asyncio.sleep(0.02)
-            output = await self._execute_step(step_type, state, resolve_key)
+            if step_type == "candidate_generation":
+                output = None
+                async for event in self._stream_candidate_generation(state, resolve_key):
+                    if event["type"] == "candidate_generation_completed":
+                        output = event["output"]
+                    else:
+                        yield event
+                if output is None:
+                    raise PipelineStageError(
+                        "candidate_generation_failed",
+                        "candidate_generation",
+                        "Candidate generation did not produce a completed result.",
+                    )
+            else:
+                output = await self._execute_step(step_type, state, resolve_key)
             completed = self._span(run["run_id"], step_type, "completed", message, output)
             self.trace.append(completed)
             yield self._event("progress", completed, index, total)
@@ -173,10 +187,46 @@ class ReliabilityPipeline:
 
         return {}
 
+    async def _stream_candidate_generation(
+        self,
+        state: Dict[str, Any],
+        resolve_key: ProviderKeyResolver,
+    ):
+        queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+
+        async def on_answer_event(event: Dict[str, Any]) -> None:
+            await queue.put(event)
+
+        task = asyncio.create_task(
+            self._generate_candidates(
+                state["run"],
+                resolve_key,
+                stream_primary=True,
+                stream_run_id=state["run"]["run_id"],
+                on_answer_event=on_answer_event,
+            )
+        )
+        while not task.done() or not queue.empty():
+            try:
+                yield await asyncio.wait_for(queue.get(), timeout=0.05)
+            except asyncio.TimeoutError:
+                continue
+        candidates, provider_error = await task
+        state["candidate_answers"] = candidates
+        if provider_error:
+            state["provider_error"] = provider_error
+        yield {
+            "type": "candidate_generation_completed",
+            "output": {"candidate_count": len(candidates), "provider_error": provider_error},
+        }
+
     async def _generate_candidates(
         self,
         run: Dict[str, Any],
         resolve_key: ProviderKeyResolver,
+        stream_primary: bool = False,
+        stream_run_id: Optional[str] = None,
+        on_answer_event: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
         fixed_answer = self._eval_answer_override(run)
         if fixed_answer:
@@ -226,24 +276,57 @@ class ReliabilityPipeline:
                     attempt_prompt = prompt
                     if attempt == 1:
                         attempt_prompt += "\n\nReturn only the final answer. Do not repeat the prompt, instructions, or conversation."
-                    response = await provider.generate(
-                        GenerateRequest(
-                            messages=[
-                                ModelMessage(
-                                    role="system",
-                                    content=(
-                                        "Generate one candidate answer for a reliability audit. "
-                                        "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning."
-                                    ),
+                    request = GenerateRequest(
+                        messages=[
+                            ModelMessage(
+                                role="system",
+                                content=(
+                                    "Generate one candidate answer for a reliability audit. "
+                                    "Answer the user directly, state uncertainty when relevant, and do not reveal or invent private reasoning."
                                 ),
-                                ModelMessage(role="user", content=attempt_prompt),
-                            ],
-                            model=run.get("model"),
-                            temperature=0.3 + (index * 0.08),
-                            max_tokens=420,
-                        )
+                            ),
+                            ModelMessage(role="user", content=attempt_prompt),
+                        ],
+                        model=run.get("model"),
+                        temperature=0.3 + (index * 0.08),
+                        max_tokens=420,
                     )
-                    answer_text = self._clean_model_text(response.text)
+                    if stream_primary and index == 0 and attempt == 0 and hasattr(provider, "stream_generate"):
+                        chunks: List[str] = []
+                        async for chunk in provider.stream_generate(request):
+                            chunks.append(chunk)
+                            if on_answer_event:
+                                await on_answer_event(
+                                    {
+                                        "type": "answer_delta",
+                                        "progress": 0.12,
+                                        "message": "Streaming answer",
+                                        "delta": chunk,
+                                        "run_id": stream_run_id or run["run_id"],
+                                    }
+                                )
+                        answer_text = self._clean_model_text("".join(chunks))
+                        response = type(
+                            "StreamedResponse",
+                            (),
+                            {
+                                "provider": getattr(provider, "name", run["provider"]),
+                                "model": run.get("model") or getattr(provider, "default_model", "provider_default"),
+                            },
+                        )()
+                    else:
+                        response = await provider.generate(request)
+                        answer_text = self._clean_model_text(response.text)
+                        if stream_primary and index == 0 and attempt == 0 and answer_text and on_answer_event:
+                            await on_answer_event(
+                                {
+                                    "type": "answer_delta",
+                                    "progress": 0.12,
+                                    "message": "Streaming answer",
+                                    "delta": answer_text,
+                                    "run_id": stream_run_id or run["run_id"],
+                                }
+                            )
                     if not self._is_bad_model_answer(answer_text, run["question"], prompt):
                         break
                     provider_errors.append("provider returned an empty or echoed answer; retried once")
@@ -264,6 +347,16 @@ class ReliabilityPipeline:
                         "semantic_cluster_id": None,
                     }
                 )
+                if index == 0 and on_answer_event:
+                    await on_answer_event(
+                        {
+                            "type": "answer_completed",
+                            "progress": 0.14,
+                            "message": "Answer streamed; checking reliability",
+                            "answer": answer_text,
+                            "run_id": stream_run_id or run["run_id"],
+                        }
+                    )
             return candidates, "; ".join(dict.fromkeys(provider_errors)) or None
         except ProviderError as exc:
             raise PipelineStageError(
@@ -430,7 +523,8 @@ class ReliabilityPipeline:
         prompt = (
             "Extract at most 8 atomic claims from the answer. Return JSON only with this schema:\n"
             '{"claims":[{"text":"string","type":"factual|decision|causal|methodological|summary",'
-            '"importance":"high|medium|low","checkability":"externally_checkable|needs_user_context|not_checkable"}]}\n\n'
+            '"importance":"high|medium|low","checkability":"externally_checkable|needs_user_context|not_checkable",'
+            '"answer_quote":"exact substring from the answer that contains this claim"}]}\n\n'
             "Answer:\n%s" % state["answer"]["final_answer"][:5000]
         )
         last_error = "provider did not return valid claim JSON"
@@ -484,6 +578,7 @@ class ReliabilityPipeline:
                     "importance": self._claim_importance(sentence),
                     "checkability": self._claim_checkability(sentence, claim_type),
                     "source_sentence": sentence,
+                    "answer_quote": sentence,
                     "risk_flags": self._claim_risk_flags(sentence),
                 }
             )
@@ -496,6 +591,7 @@ class ReliabilityPipeline:
                     "importance": "high",
                     "checkability": "externally_checkable" if self._evidence_required_for_score(state) else "not_checkable",
                     "source_sentence": state["answer"]["summary"],
+                    "answer_quote": state["answer"]["summary"],
                     "risk_flags": [],
                 }
             )
@@ -1706,6 +1802,7 @@ class ReliabilityPipeline:
                     "importance": importance,
                     "checkability": checkability,
                     "source_sentence": text[:900],
+                    "answer_quote": str(item.get("answer_quote") or text).strip()[:900],
                     "risk_flags": self._claim_risk_flags(text),
                 }
             )
@@ -2145,6 +2242,56 @@ class ReliabilityPipeline:
                 break
         return citations
 
+    def _citation_annotations(self, state: Dict[str, Any], citations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        answer = state.get("answer", {}).get("final_answer", "")
+        if not answer or not citations:
+            return []
+        citations_by_evidence = {
+            citation.get("evidence_id"): citation
+            for citation in citations
+            if citation.get("evidence_id")
+        }
+        claims_by_id = {claim["claim_id"]: claim for claim in state.get("claims", [])}
+        annotations: List[Dict[str, Any]] = []
+        used_spans = set()
+        for assessment in state.get("claim_assessments", []):
+            if assessment.get("relation") not in {"supported", "partially_supported"}:
+                continue
+            citation_ids = [
+                citations_by_evidence[evidence_id]["citation_id"]
+                for evidence_id in assessment.get("evidence_ids", [])
+                if evidence_id in citations_by_evidence
+            ]
+            if not citation_ids:
+                continue
+            claim = claims_by_id.get(assessment.get("claim_id"), {})
+            quote = str(claim.get("answer_quote") or claim.get("source_sentence") or claim.get("text") or "").strip()
+            span = self._find_answer_span(answer, quote)
+            if not span:
+                span = self._find_answer_span(answer, str(claim.get("text") or "").strip())
+            if not span or span in used_spans:
+                continue
+            used_spans.add(span)
+            annotations.append(
+                {
+                    "start_index": span[0],
+                    "end_index": span[1],
+                    "citation_ids": list(dict.fromkeys(citation_ids)),
+                }
+            )
+        annotations.sort(key=lambda item: (item["end_index"], item["start_index"]))
+        return annotations[:12]
+
+    def _find_answer_span(self, answer: str, quote: str) -> Optional[Tuple[int, int]]:
+        if not quote or len(quote) < 8:
+            return None
+        index = answer.find(quote)
+        if index < 0:
+            index = answer.lower().find(quote.lower())
+        if index < 0:
+            return None
+        return index, index + len(quote)
+
     def _analysis_basis(self, state: Dict[str, Any]) -> List[Dict[str, str]]:
         basis = [
             {
@@ -2224,7 +2371,8 @@ class ReliabilityPipeline:
         run = state["run"]
         self._apply_runtime_score_caps(state)
         reliability = self._reliability_summary(state)
-        return {
+        citations = self._citations(state)
+        graph = {
             "run": {
                 "run_id": run["run_id"],
                 "conversation_id": run.get("conversation_id"),
@@ -2243,7 +2391,8 @@ class ReliabilityPipeline:
             "answer": {
                 **state["answer"],
                 **reliability["answer"],
-                "citations": self._citations(state),
+                "citations": citations,
+                "citation_annotations": self._citation_annotations(state, citations),
                 "final_decision": reliability["answer"]["verdict"],
                 "reliability_score": state["score"],
                 "calibration_status": state["calibration"]["status"],
@@ -2278,6 +2427,72 @@ class ReliabilityPipeline:
                 "contains_plaintext_provider_keys": False,
             },
         }
+        self._validate_graph(graph)
+        return graph
+
+    def _validate_graph(self, graph: Dict[str, Any]) -> None:
+        answer = graph.get("answer") or {}
+        required_answer_strings = [
+            "final_answer",
+            "verdict",
+            "final_decision",
+            "verdict_reason",
+            "evidence_status",
+            "main_uncertainty",
+            "next_best_action",
+            "source_limitations",
+        ]
+        missing = [field for field in required_answer_strings if not str(answer.get(field) or "").strip()]
+        if missing:
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Reliability graph is missing required answer fields: %s" % ", ".join(missing),
+                retryable=False,
+            )
+        if not isinstance(answer.get("reliability_score"), int):
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Reliability score is missing or invalid.",
+                retryable=False,
+            )
+        if not graph.get("analysis_basis"):
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Reliability graph is missing analysis basis metadata.",
+                retryable=False,
+            )
+        if not ((graph.get("calibration") or {}).get("score_weights") or {}).get("source"):
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Reliability graph is missing score-weight metadata.",
+                retryable=False,
+            )
+        claim_ids = {claim.get("claim_id") for claim in graph.get("claims", [])}
+        evidence_ids = {evidence.get("evidence_id") for evidence in graph.get("evidence", [])}
+        for evidence in graph.get("evidence", []):
+            if evidence.get("claim_id") not in claim_ids:
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Evidence references a missing claim.", retryable=False)
+        for assessment in graph.get("claim_assessments", []):
+            if assessment.get("claim_id") not in claim_ids:
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Assessment references a missing claim.", retryable=False)
+            for evidence_id in assessment.get("evidence_ids", []):
+                if evidence_id not in evidence_ids:
+                    raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Assessment references missing evidence.", retryable=False)
+        citation_ids = {citation.get("citation_id") for citation in answer.get("citations", [])}
+        for citation in answer.get("citations", []):
+            evidence_id = citation.get("evidence_id")
+            if evidence_id and evidence_id not in evidence_ids:
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Citation references missing evidence.", retryable=False)
+        final_answer = str(answer.get("final_answer") or "")
+        for annotation in answer.get("citation_annotations", []):
+            if not (0 <= int(annotation.get("start_index", -1)) < int(annotation.get("end_index", -1)) <= len(final_answer)):
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Citation annotation span is invalid.", retryable=False)
+            if any(citation_id not in citation_ids for citation_id in annotation.get("citation_ids", [])):
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Citation annotation references a missing citation.", retryable=False)
 
     def _span(
         self,

@@ -183,6 +183,12 @@ export interface AnswerCitation {
   snippet: string;
 }
 
+export interface CitationAnnotation {
+  start_index: number;
+  end_index: number;
+  citation_ids: string[];
+}
+
 export interface ClaimAssessment {
   claim_id: string;
   status: string;
@@ -257,6 +263,7 @@ export interface ReliabilityGraph {
     evidence_status?: string;
     source_limitations?: string;
     citations?: AnswerCitation[];
+    citation_annotations?: CitationAnnotation[];
     top_positive_signals: string[];
     top_negative_signals: string[];
     main_uncertainty: string;
@@ -351,9 +358,12 @@ export interface PerturbationProbe {
 }
 
 export interface StreamEvent {
-  type: "progress" | "completed" | "error";
+  type: "progress" | "answer_delta" | "answer_completed" | "completed" | "error";
   progress?: number;
   message: string;
+  delta?: string;
+  answer?: string;
+  run_id?: string;
   code?: string;
   stage?: string;
   retryable?: boolean;

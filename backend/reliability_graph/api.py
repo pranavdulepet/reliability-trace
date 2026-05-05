@@ -218,7 +218,7 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
             user_message_id=user_message["message_id"],
             prior_context=prior_context,
             attachment_document_ids=attachment_document_ids,
-            search_mode=payload.search_mode or storage.get_search_preference(settings.user_id)["search_mode"],
+            search_mode="always",
         )
     )
     run = storage.create_run(settings.user_id, run_payload)
@@ -355,6 +355,7 @@ async def stream_run_events(run_id: str):
             yield _sse({"type": "progress", "span": span, "progress": min(0.08, index * 0.04), "message": span["input_summary"]})
         run_context = {
             **initial_run,
+            "search_mode": (web_search.get("route") or {}).get("search_mode") or initial_run.get("search_mode"),
             "web_search": web_search,
             "web_search_document_ids": [document_id for document_id in retrieval_document_ids if document_id not in attachment_document_ids],
             "search_used": any(call.get("result_count", 0) > 0 for call in web_search.get("calls", [])),
@@ -396,10 +397,11 @@ async def stream_run_events(run_id: str):
 
 async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document_ids: List[str]):
     preference = storage.get_search_preference(settings.user_id)
+    search_mode = "always" if run.get("use_live_provider", True) else (run.get("search_mode") or preference["search_mode"])
     route = choose_research_route(
         run["question"],
         attachment_document_ids,
-        run.get("search_mode") or preference["search_mode"],
+        search_mode,
     )
     route_dict = route_to_dict(route)
     web_search = {"route": route_dict, "calls": [], "documents": []}

@@ -58,18 +58,18 @@ Deletes the saved local key for the current user.
 
 `GET /api/search-preferences`
 
-Returns the default search mode, result cap, and search-key fingerprint.
+Returns the stored search preference, result cap, and search-key fingerprint. Normal chat attempts web retrieval automatically when a search key is available; the old `search_mode` field remains for read compatibility and eval/direct-run tooling.
 
 `PUT /api/search-preferences`
 
 ```json
 {
-  "search_mode": "auto",
+  "search_mode": "always",
   "max_results": 6
 }
 ```
 
-`search_mode` is `auto`, `always`, or `off`.
+Use `search_mode: "always"` for product chat defaults. The frontend only exposes `max_results`.
 
 `POST /api/search-key`
 
@@ -99,17 +99,24 @@ Deletes the saved web retrieval key.
   "use_live_provider": true,
   "conversation_id": "conv_...",
   "attachment_document_ids": ["doc_..."],
-  "search_mode": "auto"
+  "search_mode": "always"
 }
 ```
 
 `GET /api/runs/{run_id}/events`
 
-Streams Server-Sent Events. The final event includes the graph.
+Streams Server-Sent Events:
+
+- `answer_delta`: streamed answer text chunk.
+- `answer_completed`: answer text finished; reliability checks continue.
+- `progress`: observable audit/tool/check step.
+- `completed`: final graph.
+- `error`: stage-specific failure.
 
 `GET /api/runs/{run_id}`
 
 Returns the persisted graph after completion.
+Completed graphs include `answer.citations[]` and `answer.citation_annotations[]`; annotation citation IDs always reference real citation entries.
 
 `GET /api/runs/{run_id}/export`
 

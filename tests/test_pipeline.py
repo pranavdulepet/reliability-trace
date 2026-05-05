@@ -132,6 +132,28 @@ def test_provider_claim_json_failure_fails_run(monkeypatch):
         raise AssertionError("invalid provider claim JSON did not fail")
 
 
+def test_graph_validation_rejects_missing_reliability_fields(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    original = ReliabilityPipeline._reliability_summary
+
+    def patched_summary(self, state):
+        summary = original(self, state)
+        summary["answer"].pop("evidence_status")
+        return summary
+
+    monkeypatch.setattr(ReliabilityPipeline, "_reliability_summary", patched_summary)
+
+    try:
+        run_pipeline(base_run(question="What is ReliabilityGraph?"))
+    except PipelineStageError as exc:
+        assert exc.code == "invalid_reliability_graph"
+        assert exc.stage == "graph_validation"
+    else:
+        raise AssertionError("missing reliability fields did not fail graph validation")
+
+
 def test_eval_claim_extraction_skips_source_grounding_meta_claims():
     pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
     claims = pipeline._eval_claims(

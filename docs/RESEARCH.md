@@ -16,6 +16,8 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 | `score_weight_calibration` | Valid as a benchmark-tuned diagnostic | Linear signal weights are fitted from official-style fixed-answer eval rows with AUROC/AUPRC and false-safe penalties. This makes the score less arbitrary than hand-picked weights while preserving explicit safety caps. | The fitted score is still not a probability. Re-run calibration when features, caps, verifier, retrieval/search behavior, provider behavior, benchmark mix, or enough user labels change. |
 | `calibration` | Valid only after labels | Inspired by reliability diagrams, ECE, and Brier score. User-labeled runs and external evals produce calibration reports. | ECE/Brier describe empirical score behavior on a labeled dataset; they do not prove that a single new answer is true. |
 | `observable_activity` | Auditability signal, not a truth signal | Inspired by unfaithful chain-of-thought findings. The UI shows observable steps, calls, outputs, checks, and scores. | Activity completeness does not make an answer true and is not part of the reliability score. |
+| `inline_citations` | Evidence navigation, not a score | Supported claim spans can receive citation markers only when they map to real evidence IDs. | A citation means the cited snippet was used by the audit; it does not prove the broader source or answer is fully correct. |
+| `explainable_ui_labels` | Product transparency | Info popovers explain what each reliability component means, how it is computed, research lineage, and limits. | These explanations clarify methodology; they do not add new evidence. |
 
 ## Removed Or Demoted
 
@@ -26,6 +28,7 @@ ReliabilityGraph uses research signals as diagnostics, not as proof that an answ
 - Source-grounded checks ignore answer-format meta claims like "here is a summary" and focus scoring on factual content claims.
 - Missing sources are handled differently by question type: they block current, high-stakes, and source-required factual answers, but only mark general explanations as not source-grounded.
 - Production chat no longer substitutes local synthetic answers, fallback claim extraction, or heuristic claim/source relations when provider or verifier work fails. Eval-only fixed-answer runs still use controlled fixtures so benchmark scoring can run offline.
+- Frontend fallback verdicts and evidence summaries were removed. Missing graph fields now render as incomplete analysis instead of invented reliability output.
 
 ## Benchmark Direction
 

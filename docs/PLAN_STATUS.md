@@ -4,7 +4,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Implemented
 
-- Chat-first React UI with multi-turn threads, composer attachments, generated answers, reliability cards, collapsible activity, About, Settings, and JSON export.
+- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, reliability cards, explainable info popovers, collapsed details, About, Settings, and JSON export.
 - FastAPI backend with SQLite persistence, conversation/message storage, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
 - Provider adapters for Tinker, OpenAI, Claude, Gemini, and OpenRouter behind one backend-only boundary.
 - Provider-strict Reliability Evidence Graph pipeline with provider answer generation, structured claim extraction, structured assumptions, structured evidence assessment, attachment-scoped retrieval, claim-to-source matching, disagreement, static risk checks, scoring features, score caps, calibration status, and provider-neutral perturbation metadata.
@@ -12,7 +12,8 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Provider-backed structured claim extraction, assumption extraction, decision framing, and evidence assessment with strict JSON validation, retry on invalid JSON, redaction, and stage-specific failure when required provider work fails.
 - Required NLI entailment-verifier boundary for claim/source relations, including setup health, Settings readiness, setup script, and graph fields for verifier scores.
 - Source ingestion for chat file/URL attachments, chunking, local hashed retrieval vectors, and chunk search.
-- Research router with quiet Auto search, manual On/Off override, Tavily-backed web retrieval, source dedupe, search activity, citations, and graph fields for search mode/search use.
+- Always-on chat web retrieval with Tavily-backed source discovery, missing-search-key degradation, source dedupe, search activity, citations, inline citation annotations, and graph fields for search mode/search use.
+- Graph validation before completion so required reliability fields, score metadata, citations, and claim/evidence references cannot silently render as invented frontend state.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
 - External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; safety caps remain explicit product policy.
@@ -38,5 +39,5 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Strengthen web search next: source reputation, richer query planning, follow-up searches when first-pass evidence is weak, robots/rate-limit handling, and source-type classifiers.
 - Expand the benchmark harness: labeled datasets, run manifests, calibration plots, risk coverage, and task-specific reports.
 - Add full logprob robustness probes where provider APIs expose the needed measurements.
-- Keep the UI progressive: ask first, reveal provider/options only when useful, keep evidence tables dense but calm, and move research-heavy detail behind tabs or About.
+- Keep the UI progressive: stream the answer first, keep reliability summary compact, keep evidence tables dense but calm, and move research-heavy detail behind tabs or About.
 - Preserve the product promise: show observable evidence behind an answer; never imply hidden chain-of-thought access.

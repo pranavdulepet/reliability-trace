@@ -33,6 +33,7 @@ def test_run_event_stream_completes_without_shadowing_run_state(tmp_path, monkey
             body = "".join(response.iter_text())
 
     assert response.status_code == 200
+    assert body.index("event: answer_delta") < body.index("event: completed")
     assert "event: completed" in body
     assert "Reliability Evidence Graph ready" in body
     assert "UnboundLocalError" not in body
@@ -86,8 +87,87 @@ def test_run_event_stream_indexes_web_search_results(tmp_path, monkeypatch):
     assert completed["graph"]["run"]["search_used"] is True
     assert completed["graph"]["web_search"]["calls"][0]["result_count"] == 1
     assert completed["graph"]["web_search"]["documents"][0]["source_type"] == "web_search_result"
+    assert completed["graph"]["answer"]["citation_annotations"]
     chunks = storage.list_document_chunks(api_module.settings.user_id, [completed["graph"]["web_search"]["documents"][0]["document_id"]])
     assert chunks[0]["text"].startswith("Published date: 2026-05-01")
+
+
+def test_conversation_chat_forces_web_search_even_when_payload_says_off(tmp_path, monkeypatch):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    monkeypatch.setattr(api_module, "storage", storage)
+    monkeypatch.setattr(api_module, "entailment_verifier", FixtureEntailmentVerifier())
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: FakeProvider())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "test-search-key")
+    calls = []
+
+    def fake_search(_api_key, query, max_results, recency):
+        calls.append(query)
+        return {
+            "query": query,
+            "results": [
+                {
+                    "title": "Source",
+                    "url": "https://example.com/source",
+                    "content": "Reliability scores are diagnostic summaries, not calibrated probabilities.",
+                    "snippet": "Reliability scores are diagnostic summaries.",
+                    "score": 0.9,
+                }
+            ],
+            "response_time": 0.01,
+        }
+
+    monkeypatch.setattr(api_module, "search_tavily", fake_search)
+    conversation = storage.create_conversation(api_module.settings.user_id)
+
+    with TestClient(api_module.app) as client:
+        created = client.post(
+            f"/api/conversations/{conversation['conversation_id']}/messages",
+            json={"content": "Explain reliability scores simply.", "attachment_document_ids": [], "search_mode": "off"},
+        )
+        run_id = created.json()["run"]["run_id"]
+        with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+            body = "".join(response.iter_text())
+
+    completed = storage.get_run(api_module.settings.user_id, run_id)
+
+    assert created.status_code == 201
+    assert created.json()["run"]["search_mode"] == "always"
+    assert response.status_code == 200
+    assert calls
+    assert "event: completed" in body
+    assert completed["graph"]["run"]["search_mode"] == "always"
+
+
+def test_missing_search_key_is_reported_as_degraded_evidence(tmp_path, monkeypatch):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    monkeypatch.setattr(api_module, "storage", storage)
+    monkeypatch.setattr(api_module, "entailment_verifier", FixtureEntailmentVerifier())
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: FakeProvider())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+    run = storage.create_run(
+        api_module.settings.user_id,
+        RunCreate(
+            question="What is the latest status of reliability scores?",
+            provider="openai",
+            use_live_provider=True,
+        ),
+    )
+
+    with TestClient(api_module.app) as client:
+        with client.stream("GET", f"/api/runs/{run['run_id']}/events") as response:
+            body = "".join(response.iter_text())
+
+    completed = storage.get_run(api_module.settings.user_id, run["run_id"])
+
+    assert response.status_code == 200
+    assert "No web search key is configured in Settings." in body
+    assert completed["graph"]["web_search"]["calls"][0]["error"] == "No web search key is configured in Settings."
+    assert "no evidence retrieval for source-required question" in " ".join(completed["graph"]["score_caps"])
 
 
 def test_create_message_rejects_missing_provider_without_saving_user_message(tmp_path, monkeypatch):

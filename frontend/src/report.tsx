@@ -1,10 +1,11 @@
 import { exportUrl } from "./api";
 import { MarkdownText } from "./markdown";
 import type { SyntheticEvent } from "react";
-import type { ClaimAssessment, EvidenceItem, ReliabilityGraph } from "./types";
+import type { ClaimAssessment, EvidenceItem, ReliabilityGraph, TraceSpan } from "./types";
 
 export const TABS = [
   "Summary",
+  "Issues",
   "Claims",
   "Sources",
   "Assumptions",
@@ -12,7 +13,8 @@ export const TABS = [
   "Disagreement",
   "Checks",
   "Calibration",
-  "Perturbation",
+  "Robustness",
+  "Activity",
   "Export",
 ] as const;
 
@@ -63,6 +65,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
 
 function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Summary") return <AnswerTab graph={graph} />;
+  if (tab === "Issues") return <IssuesTab graph={graph} />;
   if (tab === "Claims") return <ClaimsTab graph={graph} />;
   if (tab === "Sources") return <EvidenceTab graph={graph} />;
   if (tab === "Assumptions") return <AssumptionsTab graph={graph} />;
@@ -70,7 +73,8 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Disagreement") return <DisagreementTab graph={graph} />;
   if (tab === "Checks") return <StressTab graph={graph} />;
   if (tab === "Calibration") return <CalibrationTab graph={graph} />;
-  if (tab === "Perturbation") return <PerturbationTab graph={graph} />;
+  if (tab === "Robustness") return <PerturbationTab graph={graph} />;
+  if (tab === "Activity") return <ActivityTab graph={graph} />;
   return <ExportTab graph={graph} />;
 }
 
@@ -133,6 +137,39 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
         ];
       })}
     />
+  );
+}
+
+function IssuesTab({ graph }: { graph: ReliabilityGraph }) {
+  const meta = answerMeta(graph);
+  if (!meta.complete) {
+    return <p className="empty-state">Reliability analysis incomplete: {meta.incompleteReason}</p>;
+  }
+  return (
+    <div className="split-columns">
+      <section>
+        <h3>What to check first</h3>
+        <p>{meta.reason}</p>
+        <p>{meta.uncertainty}</p>
+        <p>{meta.nextAction}</p>
+        {graph.score_caps.length > 0 && (
+          <>
+            <h3>Score caps</h3>
+            <ul>{graph.score_caps.map((cap) => <li key={cap}>{cap}</li>)}</ul>
+          </>
+        )}
+      </section>
+      <section>
+        <h3>Signals</h3>
+        <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
+        {graph.answer.top_positive_signals.length > 0 && (
+          <>
+            <h3>Supporting signals</h3>
+            <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
+          </>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -307,28 +344,81 @@ function PerturbationTab({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
+function ActivityTab({ graph }: { graph: ReliabilityGraph }) {
+  if (graph.trace.length === 0) return <p className="empty-state">No observable activity was recorded.</p>;
+  return (
+    <ol className="activity-list">
+      {graph.trace.map((span) => (
+        <li key={span.span_id}>
+          <strong>{formatStatus(span.type)}</strong>
+          <p>{span.input_summary}</p>
+          {span.output_summary && <small>{traceOutput(span)}</small>}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function traceOutput(span: TraceSpan): string {
+  try {
+    const parsed = JSON.parse(span.output_summary);
+    if (span.type === "research_router") {
+      const route = parsed.route?.route ? String(parsed.route.route).replaceAll("_", " ") : "no search";
+      return `Retrieval plan: ${route}. ${parsed.route?.reason ?? ""}`.trim();
+    }
+    if (span.type === "web_search") {
+      if (parsed.result_count !== undefined) return `Searched "${parsed.query ?? "query"}" and indexed ${parsed.indexed_sources ?? 0} source(s).`;
+      const call = Array.isArray(parsed.calls) ? parsed.calls[0] : null;
+      return call?.error || "Web search was skipped.";
+    }
+    if (span.type === "reliability_scoring") {
+      const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";
+      return `Reliability score ${parsed.score ?? "n/a"}/100.${caps}`;
+    }
+    return Object.entries(parsed)
+      .slice(0, 3)
+      .map(([key, value]) => `${key.replaceAll("_", " ")}: ${String(value)}`)
+      .join(" · ");
+  } catch {
+    return span.output_summary;
+  }
+}
+
 export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
   const meta = answerMeta(graph);
+  if (!meta.complete) {
+    return (
+      <div className="reliability-cards reliability-strip">
+        <article className="verdict-card verdict-do_not_rely">
+          <CardLabel label="Reliability analysis" topic="Final decision" />
+          <strong>Incomplete</strong>
+          <p>{meta.incompleteReason}</p>
+        </article>
+      </div>
+    );
+  }
   return (
-    <div className="reliability-cards">
+    <div className="reliability-cards reliability-strip">
       <article className={`verdict-card verdict-${meta.verdict}`}>
-        <span>Final decision</span>
+        <CardLabel label="Final decision" topic="Final decision" />
         <strong>{meta.verdictLabel}</strong>
-        <p className="score-line">Reliability score: {meta.score}/100</p>
+        <p className="score-line">
+          Reliability score: {meta.score}/100 <InfoIcon topic="Reliability score" />
+        </p>
         <p className="score-basis">{scoreBasis(graph)}</p>
         <p className="calibration-note">{calibrationCopy(graph)}</p>
       </article>
       <article>
-        <span>Evidence</span>
+        <CardLabel label="Evidence" topic="Evidence" />
         <strong>{meta.evidenceStatus}</strong>
         <p>{sourceSummary(graph)}</p>
       </article>
       <article>
-        <span>Main uncertainty</span>
+        <CardLabel label="Main uncertainty" topic="Main uncertainty" />
         <strong>{meta.uncertainty}</strong>
       </article>
       <article>
-        <span>Next action</span>
+        <CardLabel label="Next action" topic="Next action" />
         <strong>{meta.nextAction}</strong>
       </article>
     </div>
@@ -358,19 +448,23 @@ export function AnswerCitations({ graph }: { graph: ReliabilityGraph }) {
 
 export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
   const sections: Array<{ title: ReportTab; defaultOpen?: boolean }> = [
+    { title: "Issues", defaultOpen: answerMeta(graph).verdict === "do_not_rely" },
     { title: "Claims" },
     { title: "Sources" },
     { title: "Disagreement" },
-    { title: "Checks" },
     { title: "Calibration" },
-    { title: "Perturbation" },
+    { title: "Robustness" },
+    { title: "Activity" },
     { title: "Export" },
   ];
   return (
     <div className="answer-details">
       {sections.map((section) => (
         <details key={section.title} onToggle={handleDetailToggle} open={section.defaultOpen}>
-          <summary>{section.title}</summary>
+          <summary>
+            <span>{section.title}</span>
+            <InfoIcon topic={section.title} />
+          </summary>
           <div className="detail-panel">{renderTab(section.title, graph)}</div>
         </details>
       ))}
@@ -385,6 +479,129 @@ function handleDetailToggle(event: SyntheticEvent<HTMLDetailsElement>) {
     details.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
 }
+
+function CardLabel({ label, topic }: { label: string; topic: InfoTopic }) {
+  return (
+    <span className="card-label">
+      {label}
+      <InfoIcon topic={topic} />
+    </span>
+  );
+}
+
+type InfoTopic =
+  | "Final decision"
+  | "Reliability score"
+  | "Evidence"
+  | "Main uncertainty"
+  | "Next action"
+  | "Sources"
+  | "Claims"
+  | "Disagreement"
+  | "Calibration"
+  | "Robustness"
+  | "Activity"
+  | "Issues"
+  | "Export";
+
+function InfoIcon({ topic }: { topic: InfoTopic | ReportTab }) {
+  const info = INFO_COPY[topic as InfoTopic] ?? INFO_COPY["Reliability score"];
+  return (
+    <span className="info-wrap">
+      <span aria-label={`How ${topic} is calculated`} className="info-icon" role="button" tabIndex={0}>
+        i
+      </span>
+      <span className="info-panel" role="tooltip">
+        <strong>{topic}</strong>
+        <span>What this means: {info.meaning}</span>
+        <span>How it is computed: {info.computed}</span>
+        <span>Research basis: {info.research}</span>
+        <span>Limitations: {info.limit}</span>
+      </span>
+    </span>
+  );
+}
+
+const INFO_COPY: Record<InfoTopic, { meaning: string; computed: string; research: string; limit: string }> = {
+  "Final decision": {
+    meaning: "The product's rely/use-with-caution/do-not-rely call for this specific answer.",
+    computed: "Derived from the reliability score plus hard caps for contradiction, missing evidence, and robustness failures.",
+    research: "FActScore, SAFE / LongFact, SelfCheckGPT, Semantic Entropy, and calibration work.",
+    limit: "It is a decision aid, not proof that the answer is true.",
+  },
+  "Reliability score": {
+    meaning: "A 0-100 diagnostic for ranking risk across answers.",
+    computed: "Benchmark-tuned weights combine claim support, source match, source quality, sample agreement, and explicit caps.",
+    research: "Calibration, FActScore, SAFE / LongFact, SelfCheckGPT, and Semantic Entropy.",
+    limit: "It is not a probability, confidence score, or guarantee.",
+  },
+  Evidence: {
+    meaning: "Whether attached, fetched, or web sources support the checked claims.",
+    computed: "Provider claim judgments are combined conservatively with an entailment verifier over retrieved snippets.",
+    research: "Atomic factuality and source-grounded evaluation.",
+    limit: "Retrieval can miss better sources, and weak sources can still be wrong.",
+  },
+  "Main uncertainty": {
+    meaning: "The highest-impact reason not to over-trust the answer.",
+    computed: "Selected from contradictions, unsupported high-impact claims, missing source evidence, and disagreement signals.",
+    research: "Risk-focused factuality and calibration analysis.",
+    limit: "It summarizes the main risk; details may contain additional risks.",
+  },
+  "Next action": {
+    meaning: "The safest practical next step for the user.",
+    computed: "Derived from the verdict, source state, contradiction state, and high-stakes detection.",
+    research: "Product safety policy informed by reliability literature.",
+    limit: "This is guidance, not a research metric.",
+  },
+  Sources: {
+    meaning: "The evidence snippets used for claim checking.",
+    computed: "Built from uploads, URLs, and web results after retrieval and deduplication.",
+    research: "Search-augmented factuality checking and grounded generation.",
+    limit: "Sources are evidence, not instructions, and may be incomplete or stale.",
+  },
+  Claims: {
+    meaning: "Atomic answer claims checked against evidence.",
+    computed: "A provider extracts claims, then source matches and verifier scores assess them.",
+    research: "FActScore and SAFE / LongFact.",
+    limit: "Claim extraction can miss or split claims imperfectly.",
+  },
+  Disagreement: {
+    meaning: "Whether sampled answers converge on the same meaning.",
+    computed: "Multiple candidate answers are clustered and compared for semantic stability and conflicts.",
+    research: "SelfCheckGPT and Semantic Entropy.",
+    limit: "Model self-agreement is useful but not proof of truth.",
+  },
+  Calibration: {
+    meaning: "How the score weights and caps should be interpreted.",
+    computed: "Weights are fitted on benchmark eval rows; caps are explicit safety rules.",
+    research: "Reliability diagrams, ECE, Brier score, and risk coverage.",
+    limit: "Calibration only transfers as far as the eval distribution matches the current use case.",
+  },
+  Robustness: {
+    meaning: "Whether pressure or perturbation prompts flip the answer without new evidence.",
+    computed: "The provider is asked controlled variants and the outputs are compared.",
+    research: "Behavioral perturbation and sycophancy checks.",
+    limit: "These probes are not exhaustive adversarial testing.",
+  },
+  Activity: {
+    meaning: "Observable steps the system ran.",
+    computed: "Backend spans record routing, search, provider calls, retrieval, checking, scoring, and export state.",
+    research: "Unfaithful chain-of-thought work motivates showing observable events instead of hidden reasoning.",
+    limit: "Activity is transparency, not evidence that the answer is true.",
+  },
+  Issues: {
+    meaning: "The main risks and score caps for this answer.",
+    computed: "Collected from negative signals, contradictions, unsupported claims, and score caps.",
+    research: "Risk coverage and factuality evaluation.",
+    limit: "It prioritizes visible risks and may not list every possible issue.",
+  },
+  Export: {
+    meaning: "Raw graph data for inspection.",
+    computed: "Serialized reliability graph with provider keys redacted.",
+    research: "Auditability practice.",
+    limit: "Raw fields are for debugging and may be harder to interpret than the summary UI.",
+  },
+};
 
 function ExportTab({ graph }: { graph: ReliabilityGraph }) {
   return (
@@ -504,36 +721,45 @@ function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {
 
 function answerMeta(graph: ReliabilityGraph) {
   const score = graph.answer.reliability_score;
-  const verdict = graph.answer.final_decision ?? graph.answer.verdict ?? fallbackVerdict(score, graph);
+  const verdict = graph.answer.final_decision ?? graph.answer.verdict;
+  const missing = [
+    !verdict && "final decision",
+    typeof score !== "number" && "reliability score",
+    !graph.answer.verdict_reason && "verdict reason",
+    !graph.answer.evidence_status && "evidence status",
+    !graph.answer.main_uncertainty && "main uncertainty",
+    !graph.answer.next_best_action && "next action",
+  ].filter(Boolean);
+  if (missing.length > 0 || !verdict) {
+    return {
+      complete: false as const,
+      incompleteReason: `Missing ${missing.join(", ") || "required reliability fields"}.`,
+      score: typeof score === "number" ? score : 0,
+      verdict: "do_not_rely" as const,
+      verdictLabel: "Incomplete",
+      reason: "",
+      evidenceStatus: "Reliability analysis incomplete.",
+      uncertainty: "Reliability analysis did not finish cleanly.",
+      change: "",
+      nextAction: "Retry the run or inspect the error before relying on the answer.",
+    };
+  }
   return {
+    complete: true as const,
+    incompleteReason: "",
     score,
     verdict,
     verdictLabel: verdictLabel(verdict),
-    reason: graph.answer.verdict_reason ?? graph.answer.summary,
-    evidenceStatus: graph.answer.evidence_status ?? fallbackEvidenceStatus(graph),
+    reason: graph.answer.verdict_reason,
+    evidenceStatus: graph.answer.evidence_status,
     uncertainty: graph.answer.main_uncertainty,
     change: graph.answer.what_would_change_the_answer,
-    nextAction: graph.answer.next_best_action ?? graph.answer.recommended_user_action,
+    nextAction: graph.answer.next_best_action,
   };
-}
-
-function fallbackVerdict(score: number, graph: ReliabilityGraph): "rely" | "use_with_caution" | "do_not_rely" {
-  const hasContradiction = graph.claim_assessments.some((item) => item.status === "contradicted" || item.relation === "contradicted");
-  if (hasContradiction || score < 45) return "do_not_rely";
-  if (score >= 75 && externalEvidence(graph).length > 0) return "rely";
-  return "use_with_caution";
 }
 
 function verdictLabel(verdict: "rely" | "use_with_caution" | "do_not_rely"): string {
   if (verdict === "rely") return "Rely";
   if (verdict === "do_not_rely") return "Do not rely";
   return "Use with caution";
-}
-
-function fallbackEvidenceStatus(graph: ReliabilityGraph): string {
-  if (externalEvidence(graph).length === 0) return "No attached, fetched, or web source supports this answer.";
-  if (graph.claim_assessments.some((item) => item.status === "contradicted" || item.relation === "contradicted")) {
-    return "Sources contradict at least one checked claim.";
-  }
-  return "Sources were checked against extracted claims.";
 }

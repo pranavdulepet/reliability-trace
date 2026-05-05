@@ -28,14 +28,14 @@ SQLite is the local storage target because it keeps setup small. The storage lay
 
 URL fetch rejects credentials, loopback/private/link-local hosts, unsafe redirects, unsupported content types, and oversized responses. Duplicate documents are reused by URL or content hash.
 
-Before answer generation, a provider-neutral research router chooses:
+Before answer generation, a provider-neutral research router records the retrieval plan. Normal chat attempts web evidence on every message when a search key is available:
 
 - `no_search` for stable explanations, creative work, coding help, math, brainstorming, or explicit no-web requests.
 - `attachments_only` when the user asks about uploaded files or attached URLs.
 - `web_search` for current, recent, local, high-stakes factual, recommendation, policy, price, news, or explicit search questions.
 - `hybrid` when attachments are present but the user asks beyond them.
 
-Web retrieval uses Tavily first, with `include_answer=false`; search results are source evidence, not instructions, and the configured LLM still writes the answer. This follows the public tool-use pattern used by ChatGPT Search, Claude web search, Gemini grounding, and agent-search APIs: choose whether search is needed, rewrite the user need into a targeted query, retrieve sources, then answer with citations and visible tool activity.
+Web retrieval uses Tavily first, with `include_answer=false`; search results are source evidence, not instructions, and the configured LLM still writes the answer. This follows the public tool-use pattern used by ChatGPT Search, Claude web search, Gemini grounding, and agent-search APIs: rewrite the user need into a targeted query, retrieve sources, then answer with citations and visible tool activity. If no search key is configured, current and factual answers are visibly degraded and capped rather than treated as source-grounded.
 
 The pipeline emits provider-neutral verdict fields on every completed graph:
 
@@ -44,6 +44,7 @@ The pipeline emits provider-neutral verdict fields on every completed graph:
 - `answer.main_uncertainty`
 - `answer.next_best_action`
 - `answer.citations[]`
+- `answer.citation_annotations[]`
 - `answer.final_decision`
 - `claim_assessments[].relation`
 - `analysis_basis[]`
@@ -59,17 +60,18 @@ Claim checking has two layers. The selected provider extracts claims and assesse
 
 The frontend is a React + TypeScript app. It presents:
 
-- Chat-first question flow with provider-backed answer generation.
+- Chat-first question flow with provider-backed streaming answer generation.
 - Conversation history and multi-turn message threads.
 - Composer attachments for local text files and URLs.
 - Provider keys and default model controls in Settings.
 - Entailment verifier readiness in Settings.
-- Search key and default search controls in Settings, plus a small composer tools menu for Auto/On/Off per message.
-- Collapsible activity for provider calls, retrieval, checks, probes, and scoring.
+- Search key and max-result controls in Settings. Chat does not expose a search off switch; web evidence is attempted automatically when configured.
+- Info popovers on reliability components that explain computation, research basis, and limitations.
+- Collapsible activity/details for provider calls, retrieval, checks, probes, scoring, and export.
 - About page with the research basis and trace limits.
-- Answer-integrated reliability cards and expandable details for claims, sources, disagreement, checks, calibration, perturbation, and export.
+- Answer-integrated reliability cards and expandable details for issues, claims, sources, disagreement, calibration, robustness, activity, and export.
 
-The primary answer view is progressive: answer first, compact trust row second, detailed evidence tables only inside expandable sections.
+The primary answer view is progressive: streamed answer first, inline/source citations when evidence exists, compact trust row second, detailed evidence tables only inside expandable sections. The frontend must not invent fallback verdicts or evidence states; incomplete graphs show an incomplete-analysis state.
 
 ## Provider Boundary
 

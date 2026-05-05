@@ -32,7 +32,6 @@ import type {
   ProviderMetadata,
   ProviderPreferenceResponse,
   ReliabilityGraph,
-  SearchMode,
   SearchPreferenceResponse,
   StreamEvent,
   VerifierStatus,
@@ -69,10 +68,10 @@ function App() {
   const [keyProvider, setKeyProvider] = useState("");
   const [keyValue, setKeyValue] = useState("");
   const [searchKeyValue, setSearchKeyValue] = useState("");
-  const [draftSearchMode, setDraftSearchMode] = useState<SearchMode>("auto");
   const [view, setView] = useState<View>("chat");
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
+  const [streamingAnswer, setStreamingAnswer] = useState("");
   const [streamGraph, setStreamGraph] = useState<ReliabilityGraph | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,7 +113,6 @@ function App() {
     if (!busy && activeConversationId && !nextConversations.some((conversation) => conversation.conversation_id === activeConversationId)) {
       clearActiveConversation();
     }
-    setDraftSearchMode((current) => (current === "auto" ? nextSearchPreference.preference.search_mode : current));
     setKeyProvider((current) => {
       if (nextProviders.some((provider) => provider.provider === current && isRealProvider(provider))) return current;
       return nextProviders.find(isRealProvider)?.provider ?? current;
@@ -136,7 +134,6 @@ function App() {
 
   async function handleNewChat() {
     clearActiveConversation();
-    setDraftSearchMode(searchPreference?.preference.search_mode ?? "auto");
     setView("chat");
   }
 
@@ -202,12 +199,11 @@ function App() {
     }
   }
 
-  async function handleSaveSearchPreference(payload: { search_mode: SearchMode; max_results: number }) {
+  async function handleSaveSearchPreference(payload: { max_results: number }) {
     setError(null);
     try {
-      const nextPreference = await saveSearchPreference(payload);
+      const nextPreference = await saveSearchPreference({ search_mode: "always", max_results: payload.max_results });
       setSearchPreference(nextPreference);
-      setDraftSearchMode((current) => (current === "auto" ? nextPreference.preference.search_mode : current));
     } catch (err) {
       showError(err);
     }
@@ -292,6 +288,7 @@ function App() {
     setError(null);
     setEvents([]);
     setStreamGraph(null);
+    setStreamingAnswer("");
     try {
       const conversationId = activeConversationId ?? (await createConversation()).conversation_id;
       if (!activeConversationId) {
@@ -301,7 +298,6 @@ function App() {
       const response = await sendConversationMessage(conversationId, {
         content,
         attachment_document_ids: documentIds,
-        search_mode: draftSearchMode,
       });
       setDraft("");
       setAttachments([]);
@@ -352,6 +348,15 @@ function App() {
         const parsed = JSON.parse(event.data) as StreamEvent;
         setEvents((current) => [...current, parsed]);
       });
+      source.addEventListener("answer_delta", (event) => {
+        const parsed = JSON.parse(event.data) as StreamEvent;
+        setStreamingAnswer((current) => current + (parsed.delta ?? ""));
+      });
+      source.addEventListener("answer_completed", (event) => {
+        const parsed = JSON.parse(event.data) as StreamEvent;
+        setStreamingAnswer(parsed.answer ?? "");
+        setEvents((current) => [...current, parsed]);
+      });
       source.addEventListener("completed", (event) => {
         const parsed = JSON.parse(event.data) as StreamEvent;
         setEvents((current) => [...current, parsed]);
@@ -366,6 +371,7 @@ function App() {
       source.addEventListener("error", (event) => {
         setBusy(false);
         setStreamingRunId(null);
+        setStreamingAnswer("");
         source.close();
         reject(new Error(streamErrorMessage(event)));
       });
@@ -384,6 +390,7 @@ function App() {
     setEvents([]);
     setStreamGraph(null);
     setStreamingRunId(null);
+    setStreamingAnswer("");
     setBusy(false);
   }
 
@@ -439,6 +446,7 @@ function App() {
             events={events}
             streamGraph={streamGraph}
             streamingRunId={streamingRunId}
+            streamingAnswer={streamingAnswer}
             progress={progress}
             draft={draft}
             attachments={attachments}
@@ -447,8 +455,7 @@ function App() {
             verifierReady={verifierReady}
             verifierMessage={verifierStatus?.message ?? null}
             connectedProviderCount={connectedProviders.length}
-            searchMode={draftSearchMode}
-            setSearchMode={setDraftSearchMode}
+            searchAvailable={searchPreference?.key.key_state === "saved" || searchPreference?.key.key_state === "env"}
             setDraft={handleDraftChange}
             onSubmit={handleSubmit}
             onAddFiles={handleAddFiles}
@@ -472,6 +479,7 @@ function ChatView({
   events,
   streamGraph,
   streamingRunId,
+  streamingAnswer,
   progress,
   draft,
   attachments,
@@ -480,8 +488,7 @@ function ChatView({
   verifierReady,
   verifierMessage,
   connectedProviderCount,
-  searchMode,
-  setSearchMode,
+  searchAvailable,
   setDraft,
   onSubmit,
   onAddFiles,
@@ -493,6 +500,7 @@ function ChatView({
   events: StreamEvent[];
   streamGraph: ReliabilityGraph | null;
   streamingRunId: string | null;
+  streamingAnswer: string;
   progress: number;
   draft: string;
   attachments: DraftAttachment[];
@@ -501,8 +509,7 @@ function ChatView({
   verifierReady: boolean;
   verifierMessage: string | null;
   connectedProviderCount: number;
-  searchMode: SearchMode;
-  setSearchMode: (value: SearchMode) => void;
+  searchAvailable: boolean;
   setDraft: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
@@ -511,7 +518,8 @@ function ChatView({
   onOpenSettings: () => void;
 }) {
   const messages = conversation?.messages ?? [];
-  const hasPendingAssistant = Boolean(streamingRunId && !messages.some((message) => message.run_id === streamingRunId && message.role === "assistant"));
+  const pendingRunId = streamingRunId ?? streamGraph?.run.run_id ?? null;
+  const hasPendingAssistant = Boolean(pendingRunId && !messages.some((message) => message.run_id === pendingRunId && message.role === "assistant"));
   const scrollRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -535,12 +543,15 @@ function ChatView({
           <div className="empty-chat">
             <h1>Ask anything. See why the answer is trustworthy.</h1>
             <p>Attach files or URLs when the answer should be grounded in specific material.</p>
+            {!searchAvailable && (
+              <p className="search-warning">Web evidence is unavailable until a search key is added in Settings. Current factual answers will be less reliable.</p>
+            )}
           </div>
         ) : (
           messages.map((message) => <MessageBubble key={message.message_id} message={message} />)
         )}
         {hasPendingAssistant && (
-          <PendingAssistant events={events} graph={streamGraph} progress={progress} />
+          <PendingAssistant events={events} graph={streamGraph} progress={progress} streamingAnswer={streamingAnswer} />
         )}
       </section>
       <ChatComposer
@@ -551,8 +562,7 @@ function ChatView({
         verifierReady={verifierReady}
         verifierMessage={verifierMessage}
         connectedProviderCount={connectedProviderCount}
-        searchMode={searchMode}
-        onSearchModeChange={setSearchMode}
+        searchAvailable={searchAvailable}
         onChange={setDraft}
         onSubmit={onSubmit}
         onAddFiles={onAddFiles}
@@ -566,6 +576,7 @@ function ChatView({
 
 function MessageBubble({ message }: { message: ConversationMessage }) {
   const graph = message.run?.graph;
+  const citationLookup = graph ? new Map((graph.answer.citations ?? []).map((citation) => [citation.citation_id, citation])) : undefined;
   if (message.role === "user") {
     return (
       <article className="message-row user-message">
@@ -582,11 +593,10 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
     <article className="message-row assistant-message">
       <div className="avatar" aria-hidden="true">RG</div>
       <div className="message-content">
-        <MarkdownText text={message.content} />
+        <MarkdownText text={message.content} citations={graph?.answer.citation_annotations} citationLookup={citationLookup} />
         {graph && (
           <>
             <AnswerCitations graph={graph} />
-            <GraphActivity graph={graph} />
             <ReliabilityCards graph={graph} />
             <ReliabilityDetails graph={graph} />
           </>
@@ -623,18 +633,34 @@ function GraphActivity({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
-function PendingAssistant({ events, graph, progress }: { events: StreamEvent[]; graph: ReliabilityGraph | null; progress: number }) {
+function PendingAssistant({
+  events,
+  graph,
+  progress,
+  streamingAnswer,
+}: {
+  events: StreamEvent[];
+  graph: ReliabilityGraph | null;
+  progress: number;
+  streamingAnswer: string;
+}) {
+  const citationLookup = graph ? new Map((graph.answer.citations ?? []).map((citation) => [citation.citation_id, citation])) : undefined;
   return (
     <article className="message-row assistant-message" aria-live="polite">
       <div className="avatar" aria-hidden="true">RG</div>
       <div className="message-content">
-        <div className="typing-line" role="status">{graph ? "Finalizing answer" : "Working through the answer"}</div>
+        {streamingAnswer ? (
+          <MarkdownText text={streamingAnswer} citations={graph?.answer.citation_annotations} citationLookup={citationLookup} />
+        ) : (
+          <div className="typing-line" role="status">Starting answer</div>
+        )}
+        {!graph && streamingAnswer && <div className="checking-line" role="status">Checking reliability...</div>}
         <ActivityTrace events={events} progress={progress} defaultOpen />
         {graph && (
           <>
-            <MarkdownText text={graph.answer.final_answer} />
             <AnswerCitations graph={graph} />
             <ReliabilityCards graph={graph} />
+            <ReliabilityDetails graph={graph} />
           </>
         )}
       </div>
@@ -660,7 +686,7 @@ function SettingsView(props: {
   setSearchKeyValue: (value: string) => void;
   onSaveSearchKey: (event: FormEvent) => void;
   onDeleteSearchKey: () => void;
-  onSaveSearchPreference: (payload: { search_mode: SearchMode; max_results: number }) => void;
+  onSaveSearchPreference: (payload: { max_results: number }) => void;
 }) {
   return (
     <div className="settings-page">

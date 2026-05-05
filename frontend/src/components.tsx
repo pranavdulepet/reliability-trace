@@ -5,7 +5,6 @@ import type {
   ProviderKeyView,
   ProviderMetadata,
   ProviderPreferenceResponse,
-  SearchMode,
   SearchPreferenceResponse,
   StreamEvent,
   TraceSpan,
@@ -80,8 +79,7 @@ interface ChatComposerProps {
   verifierReady: boolean;
   verifierMessage: string | null;
   connectedProviderCount: number;
-  searchMode: SearchMode;
-  onSearchModeChange: (value: SearchMode) => void;
+  searchAvailable: boolean;
   onChange: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   onAddFiles: (files: FileList | null) => void;
@@ -98,8 +96,7 @@ export function ChatComposer({
   verifierReady,
   verifierMessage,
   connectedProviderCount,
-  searchMode,
-  onSearchModeChange,
+  searchAvailable,
   onChange,
   onSubmit,
   onAddFiles,
@@ -108,7 +105,6 @@ export function ChatComposer({
   onOpenSettings,
 }: ChatComposerProps) {
   const [urlDraft, setUrlDraft] = useState("");
-  const [toolsOpen, setToolsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const disabled = busy || value.trim().length < 3 || !providerReady || !verifierReady;
   const canAddUrl = !busy && urlDraft.trim().length > 0;
@@ -194,26 +190,9 @@ export function ChatComposer({
             Add
           </button>
         </div>
-        <details className="tools-menu" open={toolsOpen} onToggle={(event) => setToolsOpen(event.currentTarget.open)}>
-          <summary>Search: {searchModeLabel(searchMode)}</summary>
-          <div className="search-mode-options">
-            {(["auto", "always", "off"] as SearchMode[]).map((mode) => (
-              <label key={mode}>
-                <input
-                  checked={searchMode === mode}
-                  name="search-mode"
-                  type="radio"
-                  value={mode}
-                  onChange={() => {
-                    onSearchModeChange(mode);
-                    setToolsOpen(false);
-                  }}
-                />
-                <span>{searchModeLabel(mode)}</span>
-              </label>
-            ))}
-          </div>
-        </details>
+        <span className={searchAvailable ? "search-state ready" : "search-state missing"} title="Web evidence is gathered automatically when a search key is available.">
+          {searchAvailable ? "Web evidence on" : "Web evidence unavailable"}
+        </span>
         <div className="composer-status">
           {busy
             ? "Working"
@@ -430,14 +409,12 @@ export function SearchSettings({
   setKeyValue: (value: string) => void;
   onSaveKey: (event: FormEvent) => void;
   onDeleteKey: () => void;
-  onSavePreference: (payload: { search_mode: SearchMode; max_results: number }) => void;
+  onSavePreference: (payload: { max_results: number }) => void;
 }) {
-  const [mode, setMode] = useState<SearchMode>(preference?.preference.search_mode ?? "auto");
   const [maxResults, setMaxResults] = useState(preference?.preference.max_results ?? 6);
   const key = preference?.key;
 
   useEffect(() => {
-    setMode(preference?.preference.search_mode ?? "auto");
     setMaxResults(preference?.preference.max_results ?? 6);
   }, [preference]);
 
@@ -445,7 +422,7 @@ export function SearchSettings({
     <section className="settings-panel search-panel">
       <div className="section-heading">
         <h2>Web search</h2>
-        <p>Search discovers source evidence. The selected model still writes the answer and ReliabilityGraph audits it.</p>
+        <p>Web evidence is gathered automatically when a search key is available. The selected model still writes the answer and ReliabilityGraph audits it.</p>
       </div>
       <form className="inline-form" onSubmit={onSaveKey}>
         <select value="tavily" disabled aria-label="Web search provider">
@@ -477,23 +454,14 @@ export function SearchSettings({
         className="preference-form search-preference-form"
         onSubmit={(event) => {
           event.preventDefault();
-          onSavePreference({ search_mode: mode, max_results: maxResults });
+          onSavePreference({ max_results: maxResults });
         }}
       >
-        <div className="settings-number-row">
-          <label>
-            Default search
-            <select value={mode} onChange={(event) => setMode(event.target.value as SearchMode)}>
-              <option value="auto">Auto</option>
-              <option value="always">On</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
-          <label>
-            Max results
-            <input min={1} max={10} type="number" value={maxResults} onChange={(event) => setMaxResults(Number(event.target.value))} />
-          </label>
-        </div>
+        <label>
+          Max web results per message
+          <input min={1} max={10} type="number" value={maxResults} onChange={(event) => setMaxResults(Number(event.target.value))} />
+        </label>
+        <p className="panel-note">Search is always attempted for normal chat. If no key is saved, current and factual answers are marked as less reliable.</p>
         <button type="submit">Save search defaults</button>
       </form>
     </section>
@@ -578,12 +546,6 @@ export function formatTraceOutput(span: TraceSpan): string {
   }
   const entries = Object.entries(parsed).slice(0, 3);
   return entries.map(([key, value]) => `${key.replaceAll("_", " ")}: ${String(value)}`).join(" · ");
-}
-
-function searchModeLabel(mode: SearchMode): string {
-  if (mode === "always") return "On";
-  if (mode === "off") return "Off";
-  return "Auto";
 }
 
 function parseOutput(value: string): Record<string, any> | null {

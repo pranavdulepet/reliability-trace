@@ -1,5 +1,9 @@
 import os
-from typing import Any, Dict, List
+import json
+import threading
+import urllib.error
+import urllib.request
+from typing import Any, AsyncIterable, Dict, List
 
 from .base import GenerateRequest, GenerateResponse, ModelMessage, ModelProvider, ProviderError
 from .async_utils import run_blocking
@@ -62,6 +66,108 @@ class OpenAICompatibleProvider(ModelProvider):
             raw=result,
             usage=result.get("usage"),
         )
+
+    async def stream_generate(self, request: GenerateRequest) -> AsyncIterable[str]:
+        if request.response_format is not None:
+            response = await self.generate(request)
+            yield response.text
+            return
+
+        model = request.model or self.default_model
+        if not model:
+            raise ProviderError("%s requires a model" % self.name)
+        endpoint = "/completions" if self.use_completions else "/chat/completions"
+        payload: Dict[str, Any] = {
+            "model": model,
+            "temperature": request.temperature,
+            "max_tokens": request.max_tokens,
+            "stream": True,
+        }
+        if self.use_completions:
+            payload["prompt"] = self._prompt(request.messages)
+        else:
+            payload["messages"] = self._messages(request.messages)
+
+        headers = {
+            "Authorization": "Bearer " + self.api_key,
+            "Content-Type": "application/json",
+        }
+        headers.update(self.extra_headers)
+
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        def worker() -> None:
+            try:
+                for chunk in self._stream_chunks(self.base_url + endpoint, headers, payload):
+                    loop.call_soon_threadsafe(queue.put_nowait, ("chunk", chunk))
+                loop.call_soon_threadsafe(queue.put_nowait, ("done", None))
+            except Exception as exc:
+                loop.call_soon_threadsafe(queue.put_nowait, ("error", exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+        saw_text = False
+        while True:
+            kind, value = await queue.get()
+            if kind == "done":
+                break
+            if kind == "error":
+                if isinstance(value, ProviderError):
+                    raise value
+                raise ProviderError("provider streaming failed: %s" % value) from value
+            saw_text = True
+            yield str(value)
+        if not saw_text:
+            raise ProviderError("%s streaming returned no text" % self.name)
+
+    def _stream_chunks(self, url: str, headers: Dict[str, str], payload: Dict[str, Any]):
+        request_headers = {
+            "Accept": "text/event-stream",
+            "User-Agent": "ReliabilityGraph/0.1",
+        }
+        request_headers.update(headers)
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=request_headers,
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=90) as response:
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        parsed = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    for chunk in self._text_from_stream_payload(parsed):
+                        if chunk:
+                            yield chunk
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise ProviderError("provider HTTP %s: %s" % (exc.code, body[:600])) from exc
+        except urllib.error.URLError as exc:
+            raise ProviderError("provider request failed: %s" % exc.reason) from exc
+        except (TimeoutError, OSError) as exc:
+            raise ProviderError("provider request failed: %s" % exc) from exc
+
+    def _text_from_stream_payload(self, payload: Dict[str, Any]) -> List[str]:
+        chunks: List[str] = []
+        for choice in payload.get("choices") or []:
+            delta = choice.get("delta") or {}
+            text = delta.get("content") or delta.get("text") or choice.get("text") or ""
+            if isinstance(text, list):
+                text = "".join(str(part.get("text", "")) if isinstance(part, dict) else str(part) for part in text)
+            if text:
+                chunks.append(str(text))
+        return chunks
 
     def _messages(self, messages: List[ModelMessage]) -> List[Dict[str, str]]:
         return [{"role": message.role, "content": message.content} for message in messages]
