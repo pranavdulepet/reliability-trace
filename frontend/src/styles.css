@@ -807,6 +807,16 @@ label {
   display: block;
 }
 
+.panel-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin: 10px 0 0;
+}
+
+.panel-note code {
+  color: var(--text);
+}
+
 .status-dot {
   border-radius: 50%;
   display: inline-block;

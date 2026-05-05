@@ -118,7 +118,7 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
   const assessments = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
   return (
     <Table
-      columns={["Claim", "Type", "Importance", "Relation", "Method", "Why", "Source limit"]}
+      columns={["Claim", "Type", "Importance", "Relation", "Method", "Verifier", "Why", "Source limit"]}
       rows={graph.claims.map((claim) => {
         const assessment = assessments.get(claim.claim_id);
         return [
@@ -126,13 +126,21 @@ function ClaimsTab({ graph }: { graph: ReliabilityGraph }) {
           claim.type,
           claim.importance,
           assessment?.relation ?? assessment?.status ?? "unassessed",
-          formatStatus(assessment?.assessment_method ?? "unassessed"),
+          assessment?.assessment_method === "provider_entailment_verifier" ? "Provider + entailment verifier" : formatStatus(assessment?.assessment_method ?? "unassessed"),
+          verifierSummary(assessment),
           assessment?.why ?? assessment?.explanation ?? "",
           assessment?.source_limit ?? `${assessment?.evidence_ids.length ?? 0} matched evidence item(s)`,
         ];
       })}
     />
   );
+}
+
+function verifierSummary(assessment: ClaimAssessment | undefined): string {
+  if (!assessment?.verifier) return "";
+  const entailment = assessment.entailment_score === undefined ? "n/a" : assessment.entailment_score.toFixed(2);
+  const contradiction = assessment.contradiction_score === undefined ? "n/a" : assessment.contradiction_score.toFixed(2);
+  return `${assessment.verifier} · entail ${entailment} · contradict ${contradiction}`;
 }
 
 function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {

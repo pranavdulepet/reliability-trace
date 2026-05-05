@@ -11,6 +11,7 @@ import {
   getProviderPreference,
   getProviders,
   getSearchPreference,
+  getVerifierStatus,
   runEventSource,
   saveKey,
   saveProviderPreference,
@@ -34,6 +35,7 @@ import type {
   SearchMode,
   SearchPreferenceResponse,
   StreamEvent,
+  VerifierStatus,
 } from "./types";
 import "./styles.css";
 
@@ -58,6 +60,7 @@ function App() {
   const [keys, setKeys] = useState<ProviderKeyView[]>([]);
   const [preference, setPreference] = useState<ProviderPreferenceResponse | null>(null);
   const [searchPreference, setSearchPreference] = useState<SearchPreferenceResponse | null>(null);
+  const [verifierStatus, setVerifierStatus] = useState<VerifierStatus | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ConversationView | null>(null);
@@ -89,20 +92,24 @@ function App() {
     [providers],
   );
   const providerReady = Boolean(preference?.resolved);
+  const verifierReady = Boolean(verifierStatus?.ready);
+  const chatReady = providerReady && verifierReady;
   const progress = events.length === 0 ? 0 : events[events.length - 1].progress ?? 0;
 
   async function refreshWorkspace() {
-    const [nextProviders, nextKeys, nextPreference, nextSearchPreference, nextConversations] = await Promise.all([
+    const [nextProviders, nextKeys, nextPreference, nextSearchPreference, nextVerifierStatus, nextConversations] = await Promise.all([
       getProviders(),
       getKeys(),
       getProviderPreference(),
       getSearchPreference(),
+      getVerifierStatus(),
       getConversations(),
     ]);
     setProviders(nextProviders);
     setKeys(nextKeys);
     setPreference(nextPreference);
     setSearchPreference(nextSearchPreference);
+    setVerifierStatus(nextVerifierStatus);
     setConversations(nextConversations);
     if (!busy && activeConversationId && !nextConversations.some((conversation) => conversation.conversation_id === activeConversationId)) {
       clearActiveConversation();
@@ -278,7 +285,7 @@ function App() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content || busy || !providerReady || submitLockRef.current) return;
+    if (!content || busy || !chatReady || submitLockRef.current) return;
 
     submitLockRef.current = true;
     setBusy(true);
@@ -417,6 +424,7 @@ function App() {
             onDeleteKey={handleDeleteKey}
             onSavePreference={handleSavePreference}
             searchPreference={searchPreference}
+            verifierStatus={verifierStatus}
             searchKeyValue={searchKeyValue}
             setSearchKeyValue={setSearchKeyValue}
             onSaveSearchKey={handleSaveSearchKey}
@@ -436,6 +444,8 @@ function App() {
             attachments={attachments}
             busy={busy}
             providerReady={providerReady}
+            verifierReady={verifierReady}
+            verifierMessage={verifierStatus?.message ?? null}
             connectedProviderCount={connectedProviders.length}
             searchMode={draftSearchMode}
             setSearchMode={setDraftSearchMode}
@@ -467,6 +477,8 @@ function ChatView({
   attachments,
   busy,
   providerReady,
+  verifierReady,
+  verifierMessage,
   connectedProviderCount,
   searchMode,
   setSearchMode,
@@ -486,6 +498,8 @@ function ChatView({
   attachments: DraftAttachment[];
   busy: boolean;
   providerReady: boolean;
+  verifierReady: boolean;
+  verifierMessage: string | null;
   connectedProviderCount: number;
   searchMode: SearchMode;
   setSearchMode: (value: SearchMode) => void;
@@ -534,6 +548,8 @@ function ChatView({
         attachments={attachments}
         busy={busy}
         providerReady={providerReady}
+        verifierReady={verifierReady}
+        verifierMessage={verifierMessage}
         connectedProviderCount={connectedProviderCount}
         searchMode={searchMode}
         onSearchModeChange={setSearchMode}
@@ -639,6 +655,7 @@ function SettingsView(props: {
   onDeleteKey: (provider: string) => void;
   onSavePreference: (payload: { provider: string | null; model: string | null; samples: number; max_cost_usd: number }) => void;
   searchPreference: SearchPreferenceResponse | null;
+  verifierStatus: VerifierStatus | null;
   searchKeyValue: string;
   setSearchKeyValue: (value: string) => void;
   onSaveSearchKey: (event: FormEvent) => void;
@@ -676,6 +693,19 @@ function SettingsView(props: {
           onDeleteKey={props.onDeleteSearchKey}
           onSavePreference={props.onSaveSearchPreference}
         />
+        <section className="settings-panel">
+          <div className="section-heading">
+            <h2>Entailment verifier</h2>
+            <p>Required for claim/source reliability checks.</p>
+          </div>
+          <div className="key-row">
+            <div>
+              <strong>{props.verifierStatus?.ready ? "Ready" : "Setup required"}</strong>
+              <span>{props.verifierStatus?.message ?? "Checking verifier status..."}</span>
+            </div>
+          </div>
+          {!props.verifierStatus?.ready && <p className="panel-note">Run <code>python scripts/setup_nli_verifier.py</code>, then restart the backend.</p>}
+        </section>
       </div>
     </div>
   );
@@ -727,13 +757,14 @@ function streamErrorMessage(event: Event): string {
   const data = "data" in event ? (event as MessageEvent).data : null;
   if (typeof data === "string" && data.trim()) {
     try {
-      const parsed = JSON.parse(data) as { message?: string };
-      return parsed.message || "Run stream failed";
+      const parsed = JSON.parse(data) as { message?: string; stage?: string; code?: string };
+      if (parsed.message && parsed.stage) return `${formatTraceType(parsed.stage)}: ${parsed.message}`;
+      return parsed.message || parsed.code || "Run failed";
     } catch {
       return data;
     }
   }
-  return "Run stream failed";
+  return "Run failed";
 }
 
 function formatTraceType(value: string): string {

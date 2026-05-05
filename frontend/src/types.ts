@@ -95,6 +95,14 @@ export interface SearchPreferenceResponse {
   key: SearchKeyView;
 }
 
+export interface VerifierStatus {
+  ready: boolean;
+  provider: string;
+  model: string;
+  cache_dir: string | null;
+  message: string;
+}
+
 export interface ConversationSummary {
   conversation_id: string;
   title: string;
@@ -185,6 +193,11 @@ export interface ClaimAssessment {
   source_limit?: string;
   evidence_ids: string[];
   assessment_method?: string;
+  verifier?: string;
+  provider_relation?: string | null;
+  entailment_score?: number;
+  contradiction_score?: number;
+  neutral_score?: number;
 }
 
 export interface Assumption {
@@ -329,6 +342,9 @@ export interface StreamEvent {
   type: "progress" | "completed" | "error";
   progress?: number;
   message: string;
+  code?: string;
+  stage?: string;
+  retryable?: boolean;
   span?: TraceSpan;
   graph?: ReliabilityGraph;
   trace?: TraceSpan[];

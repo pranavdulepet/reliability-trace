@@ -11,6 +11,7 @@ import type {
   RunView,
   SearchMode,
   SearchPreferenceResponse,
+  VerifierStatus,
 } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
@@ -25,9 +26,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || response.statusText);
+    throw new Error(readErrorMessage(text) || response.statusText);
   }
   return response.json() as Promise<T>;
+}
+
+function readErrorMessage(text: string): string {
+  if (!text.trim()) return "";
+  try {
+    const parsed = JSON.parse(text) as { detail?: string | { message?: string; stage?: string; code?: string } };
+    if (typeof parsed.detail === "string") return parsed.detail;
+    if (parsed.detail?.message && parsed.detail.stage) return `${parsed.detail.stage.replaceAll("_", " ")}: ${parsed.detail.message}`;
+    return parsed.detail?.message ?? parsed.detail?.code ?? text;
+  } catch {
+    return text;
+  }
 }
 
 export async function getProviders(): Promise<ProviderMetadata[]> {
@@ -69,6 +82,10 @@ export async function saveProviderPreference(payload: {
 
 export async function getSearchPreference(): Promise<SearchPreferenceResponse> {
   return request<SearchPreferenceResponse>("/api/search-preferences");
+}
+
+export async function getVerifierStatus(): Promise<VerifierStatus> {
+  return request<VerifierStatus>("/api/verifier");
 }
 
 export async function saveSearchPreference(payload: {

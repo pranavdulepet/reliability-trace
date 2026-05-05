@@ -77,6 +77,8 @@ interface ChatComposerProps {
   attachments: DraftAttachment[];
   busy: boolean;
   providerReady: boolean;
+  verifierReady: boolean;
+  verifierMessage: string | null;
   connectedProviderCount: number;
   searchMode: SearchMode;
   onSearchModeChange: (value: SearchMode) => void;
@@ -93,6 +95,8 @@ export function ChatComposer({
   attachments,
   busy,
   providerReady,
+  verifierReady,
+  verifierMessage,
   connectedProviderCount,
   searchMode,
   onSearchModeChange,
@@ -106,7 +110,7 @@ export function ChatComposer({
   const [urlDraft, setUrlDraft] = useState("");
   const [toolsOpen, setToolsOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const disabled = busy || value.trim().length < 3 || !providerReady;
+  const disabled = busy || value.trim().length < 3 || !providerReady || !verifierReady;
   const canAddUrl = !busy && urlDraft.trim().length > 0;
 
   useEffect(() => {
@@ -211,9 +215,17 @@ export function ChatComposer({
           </div>
         </details>
         <div className="composer-status">
-          {busy ? "Working" : providerReady ? "Ready" : connectedProviderCount === 0 ? "Connect a provider in Settings" : "Choose a default provider in Settings"}
+          {busy
+            ? "Working"
+            : !providerReady
+              ? connectedProviderCount === 0
+                ? "Connect a provider in Settings"
+                : "Choose a default provider in Settings"
+              : verifierReady
+                ? "Ready"
+                : verifierMessage || "Set up the entailment verifier in Settings"}
         </div>
-        {!providerReady && (
+        {(!providerReady || !verifierReady) && (
           <button className="text-link" type="button" onClick={onOpenSettings}>
             Settings
           </button>
