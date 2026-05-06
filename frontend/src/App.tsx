@@ -37,6 +37,13 @@ import type {
   StreamEvent,
   VerifierStatus,
 } from "./types";
+import "@fontsource/ibm-plex-sans/latin-400.css";
+import "@fontsource/ibm-plex-sans/latin-500.css";
+import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/ibm-plex-sans/latin-700.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
+import "@fontsource/ibm-plex-mono/latin-600.css";
 import "./styles.css";
 
 type View = "chat" | "settings" | "about";
@@ -535,8 +542,8 @@ function ChatView({
       <section ref={scrollRef} className="thread-scroll" aria-busy={busy} aria-label="Conversation">
         {messages.length === 0 && !hasPendingAssistant ? (
           <div className="empty-chat">
-            <h1>Ask anything. See why the answer is trustworthy.</h1>
-            <p>Attach files or paste links in the message when the answer should be grounded in specific material.</p>
+            <h1>Ask anything. Check the answer.</h1>
+            <p>The app answers first, then audits claims, sources, consistency, and risk. Attach files or paste links when you want specific material checked.</p>
             {!searchAvailable && (
               <p className="search-warning">Web evidence is unavailable until a search key is added in Settings. Current factual answers will be less reliable.</p>
             )}

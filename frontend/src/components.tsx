@@ -83,7 +83,7 @@ export function ConversationList({
                 type="button"
                 onClick={() => onDeleteConversation(conversation.conversation_id)}
               >
-                Delete
+                <span aria-hidden="true">x</span>
               </button>
             </div>
           ))

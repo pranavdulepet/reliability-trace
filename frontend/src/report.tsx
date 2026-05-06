@@ -428,7 +428,7 @@ export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
     <details className="analysis-drawer" data-reliability-section onToggle={handleDetailToggle} open={meta.verdict === "do_not_rely"}>
       <summary>
         <span>Full reliability analysis</span>
-        <small>Evidence, claims, consistency, score, and export</small>
+        <small>Evidence, claims, score</small>
       </summary>
       <div className="analysis-drawer-body">
         <nav className="analysis-tab-row" aria-label="Reliability analysis sections">
