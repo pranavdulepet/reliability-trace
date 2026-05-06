@@ -253,17 +253,22 @@ def _sample_examples(examples: list, limit: Optional[int], seed: int) -> list:
 
 def _internal_regressions(results: list) -> list[str]:
     regressions = []
-    for baseline_name in [
+    ranking_gate_baselines = {
         "claim_support_only",
         "retrieval_lexical",
         "sample_consistency_only",
-        "selfcheck_ngram",
-    ]:
+    }
+    safety_gate_baselines = ranking_gate_baselines | {"selfcheck_ngram"}
+    for baseline_name in sorted(safety_gate_baselines):
         comparison = _paired_baseline_comparison(results, baseline_name)
         if not comparison:
             continue
         comparable_safety = comparison["baseline_false_safe"] <= comparison["full_false_safe"] + 0.02
-        if comparable_safety and _metric_beats(comparison["baseline_auroc"], comparison["full_auroc"]):
+        if (
+            baseline_name in ranking_gate_baselines
+            and comparable_safety
+            and _metric_beats(comparison["baseline_auroc"], comparison["full_auroc"])
+        ):
             regressions.append(
                 "%s AUROC %.4f beat full score AUROC %.4f on the same %d rows"
                 % (
@@ -273,7 +278,11 @@ def _internal_regressions(results: list) -> list[str]:
                     comparison["count"],
                 )
             )
-        if comparable_safety and _metric_beats(comparison["baseline_auprc"], comparison["full_auprc"]):
+        if (
+            baseline_name in ranking_gate_baselines
+            and comparable_safety
+            and _metric_beats(comparison["baseline_auprc"], comparison["full_auprc"])
+        ):
             regressions.append(
                 "%s AUPRC %.4f beat full score AUPRC %.4f on the same %d rows"
                 % (

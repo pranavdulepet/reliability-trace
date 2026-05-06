@@ -257,15 +257,25 @@ def test_regression_gate_compares_baselines_on_same_rows():
 
 def test_regression_gate_flags_same_row_baseline_win():
     results = [
-        _gate_result("selfcheck", "bad-low-risk", risk=0.1, baseline_risk=0.95, bad=True),
-        _gate_result("selfcheck", "bad-high-risk", risk=0.2, baseline_risk=0.9, bad=True),
-        _gate_result("selfcheck", "good", risk=0.8, baseline_risk=0.05, bad=False),
+        _gate_result("selfcheck", "bad-low-risk", risk=0.1, baseline_risk=0.95, bad=True, baseline_name="sample_consistency_only"),
+        _gate_result("selfcheck", "bad-high-risk", risk=0.2, baseline_risk=0.9, bad=True, baseline_name="sample_consistency_only"),
+        _gate_result("selfcheck", "good", risk=0.8, baseline_risk=0.05, bad=False, baseline_name="sample_consistency_only"),
     ]
 
     regressions = _internal_regressions(results)
 
     assert regressions
     assert any("beat full score" in item for item in regressions)
+
+
+def test_regression_gate_reports_selfcheck_ngram_but_does_not_block_on_ranking():
+    results = [
+        _gate_result("selfcheck", "bad-low-risk", risk=0.4, baseline_risk=0.95, bad=True),
+        _gate_result("selfcheck", "bad-high-risk", risk=0.3, baseline_risk=0.9, bad=True),
+        _gate_result("selfcheck", "good", risk=0.8, baseline_risk=0.05, bad=False),
+    ]
+
+    assert _internal_regressions(results) == []
 
 
 def test_regression_gate_does_not_block_on_unsafe_baseline_win():
@@ -279,18 +289,19 @@ def test_regression_gate_does_not_block_on_unsafe_baseline_win():
     assert _internal_regressions(results) == []
 
 
-def _gate_result(benchmark: str, example_id: str, risk: float, baseline_risk: float, bad: bool) -> dict:
+def _gate_result(benchmark: str, example_id: str, risk: float, baseline_risk: float, bad: bool, baseline_name: str = "selfcheck_ngram") -> dict:
+    semantic_stability = 1.0 - (baseline_risk if baseline_name == "sample_consistency_only" else risk)
     return {
         "benchmark": benchmark,
         "example_id": example_id,
-        "features": {"claim_support_rate": 1.0 - risk, "semantic_stability": 1.0 - risk},
+        "features": {"claim_support_rate": 1.0 - risk, "semantic_stability": semantic_stability},
         "metrics": {
             "score": 1.0 - risk,
             "risk_score": risk,
             "correctness": 0.0 if bad else 1.0,
             "bad_answer": bad,
             "false_safe": bad and risk <= 0.25,
-            "selfcheck_ngram_risk": baseline_risk,
+            "selfcheck_ngram_risk": baseline_risk if baseline_name == "selfcheck_ngram" else None,
         },
         "graph": {"evidence": [{"relevance_score": 1.0 - risk}]},
     }

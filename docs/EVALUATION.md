@@ -70,7 +70,7 @@ Current RAGTruth strengthening focuses on source-grounded hallucination risk: me
 
 ## Baselines
 
-Reports include same-data baselines: random/prior, claim-support-only, retrieval lexical support, sample-consistency-only, SelfCheck n-gram, and the full ReliabilityGraph score. Use `--fail-on-regression` to fail the command when the full score loses AUROC/AUPRC by more than 0.02 to an internal non-random baseline with comparable false-safe rate, or when the full score has materially worse false-safe rate. A rank-only baseline that marks many bad answers as safe is reported, but it is not treated as a safe replacement for the product score.
+Reports include same-data baselines: random/prior, claim-support-only, retrieval lexical support, sample-consistency-only, SelfCheck n-gram, and the full ReliabilityGraph score. Use `--fail-on-regression` to fail the command when the full score loses AUROC/AUPRC by more than 0.02 to the internal non-random general baselines with comparable false-safe rate, or when the full score has materially worse false-safe rate. SelfCheck n-gram is reported as a benchmark-specific reference; it can beat the general score on SelfCheck ranking without failing the gate, but false-safe regressions still fail.
 
 ## Limits
 

@@ -549,10 +549,10 @@ function ChatView({
             )}
           </div>
         ) : (
-          messages.map((message) => <MessageBubble key={message.message_id} message={message} />)
+          messages.map((message) => <MessageBubble key={message.message_id} message={message} onUsePrompt={setDraft} />)
         )}
         {hasPendingAssistant && (
-          <PendingAssistant events={events} graph={streamGraph} progress={progress} streamingAnswer={streamingAnswer} />
+          <PendingAssistant events={events} graph={streamGraph} progress={progress} streamingAnswer={streamingAnswer} onUsePrompt={setDraft} />
         )}
       </section>
       <ChatComposer
@@ -574,7 +574,7 @@ function ChatView({
   );
 }
 
-function MessageBubble({ message }: { message: ConversationMessage }) {
+function MessageBubble({ message, onUsePrompt }: { message: ConversationMessage; onUsePrompt: (prompt: string) => void }) {
   const graph = message.run?.graph;
   const citationLookup = graph ? new Map((graph.answer.citations ?? []).map((citation) => [citation.citation_id, citation])) : undefined;
   if (message.role === "user") {
@@ -597,7 +597,7 @@ function MessageBubble({ message }: { message: ConversationMessage }) {
         {graph && (
           <>
             <AnswerCitations graph={graph} />
-            <ReliabilityCards graph={graph} />
+            <ReliabilityCards graph={graph} onUsePrompt={onUsePrompt} />
             <ReliabilityDetails graph={graph} />
           </>
         )}
@@ -638,11 +638,13 @@ function PendingAssistant({
   graph,
   progress,
   streamingAnswer,
+  onUsePrompt,
 }: {
   events: StreamEvent[];
   graph: ReliabilityGraph | null;
   progress: number;
   streamingAnswer: string;
+  onUsePrompt: (prompt: string) => void;
 }) {
   const citationLookup = graph ? new Map((graph.answer.citations ?? []).map((citation) => [citation.citation_id, citation])) : undefined;
   return (
@@ -659,7 +661,7 @@ function PendingAssistant({
         {graph && (
           <>
             <AnswerCitations graph={graph} />
-            <ReliabilityCards graph={graph} />
+            <ReliabilityCards graph={graph} onUsePrompt={onUsePrompt} />
             <ReliabilityDetails graph={graph} />
           </>
         )}

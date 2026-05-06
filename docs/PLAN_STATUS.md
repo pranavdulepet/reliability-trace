@@ -4,13 +4,13 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Implemented
 
-- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, one post-audit Reliability Score summary, an Elicit-like full-analysis drawer, About, Settings, and JSON export.
+- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, one post-audit Reliability Score summary, question-specific score reason, why-it-matters copy, repair prompt chips, an Elicit-like full-analysis drawer, About, Settings, and JSON export.
 - FastAPI backend with SQLite persistence, conversation/message storage, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
 - Provider adapters for Tinker, OpenAI, Claude, Gemini, and OpenRouter behind one backend-only boundary.
 - Provider-strict v2 Reliability Evidence Graph pipeline with provider answer generation, evidence packet building, structured claim extraction, structured assumptions, structured evidence assessment, attachment/web scoped retrieval, claim-to-source matching, disagreement, static risk checks, scoring features, score caps, calibration metadata, and provider-neutral perturbation metadata.
 - Local persistence of completed v2 graphs in SQLite `runs.graph_json` and traces in `runs.trace_json`; exports return the stored graph.
 - SSE contract where `answer_delta` streams the answer, `audit_progress` reports audit stages, and `completed` is the first event containing the final Reliability Score.
-- Answer-specific verdicts, evidence status, uncertainty, next action, source limitations, and claim relations.
+- Answer-specific verdicts, evidence status, uncertainty, next action, source limitations, claim relations, primary risk, reduced score breakdown, and concrete reliability-improvement prompts.
 - Provider-backed structured claim extraction, assumption extraction, decision framing, and evidence assessment with strict JSON validation, retry on invalid JSON, redaction, and stage-specific failure when required provider work fails.
 - Required NLI entailment-verifier boundary for claim/source relations, including setup health, Settings readiness, setup script, and graph fields for verifier scores.
 - Source ingestion for chat file/URL attachments, chunking, local hashed retrieval vectors, and chunk search.
@@ -18,7 +18,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Graph validation before completion so required reliability fields, score metadata, citations, and claim/evidence references cannot silently render as invented frontend state.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
-- External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; safety caps remain explicit product policy.
+- External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; source-required answers use evidence-first weighting and safety caps remain explicit product policy.
 - RAG/source-grounding hardening for meta-claim filtering, wider per-claim evidence retrieval, structured negation, unit-aware numeric contradiction checks, and web-result published-date preservation.
 - Live provider perturbation checks for connected provider runs.
 - Security defaults: provider keys never enter frontend code, saved keys are encrypted, exports exclude plaintext keys, and the main UI requires a connected provider plus ready entailment verifier before answer generation.
@@ -41,5 +41,5 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Strengthen web search next: source reputation, richer query planning, follow-up searches when first-pass evidence is weak, robots/rate-limit handling, and source-type classifiers.
 - Expand the benchmark harness: labeled datasets, run manifests, calibration plots, risk coverage, and task-specific reports.
 - Add full logprob robustness probes where provider APIs expose the needed measurements.
-- Keep the UI progressive: stream the answer first, keep reliability summary compact, keep evidence tables dense but calm, and move research-heavy detail behind tabs or About.
+- Keep the UI progressive: stream the answer first, keep reliability summary focused on score/reason/matter/repair, keep evidence tables dense but calm, and move research-heavy detail behind tabs or About.
 - Preserve the product promise: show observable evidence behind an answer; never imply hidden chain-of-thought access.

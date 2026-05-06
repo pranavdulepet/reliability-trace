@@ -9,16 +9,16 @@
     "source_quality_score": 0.031886
   },
   "evidence_required_weights": {
-    "claim_support_rate": 0.183157,
-    "retrieval_alignment_score": 0.203897,
-    "retrieval_peak_score": 0.062234,
-    "sample_overlap_stability": 0.106326,
-    "semantic_stability": 0.301686,
-    "source_quality_score": 0.1427
+    "claim_support_rate": 0.42,
+    "retrieval_alignment_score": 0.2,
+    "retrieval_peak_score": 0.08,
+    "sample_overlap_stability": 0.07,
+    "semantic_stability": 0.08,
+    "source_quality_score": 0.15
   },
   "git_sha": "d557b43321e0b90dab15cdc4d9d6554319e28efe",
   "input": "data/evals/runs/20260505_124205/results.jsonl",
-  "limitations": "These weights are benchmark-tuned diagnostics, not a probability calibration. Held-out evals and real user labels remain required before making stronger calibration claims.",
+  "limitations": "These weights are benchmark-tuned diagnostics with a product policy adjustment that makes source-required answers evidence-first. Held-out evals and real user labels remain required before making stronger calibration claims.",
   "metrics": {
     "default_guard": {
       "auprc": 0.7394,
@@ -72,7 +72,7 @@
     },
     "validation": null
   },
-  "objective": "Maximize bad-answer risk ranking AUROC/AUPRC with a false-safe penalty. Only linear signal weights are fitted; safety caps remain hand-audited policy.",
+  "objective": "Maximize bad-answer risk ranking AUROC/AUPRC with a false-safe penalty, then keep source-required product scoring evidence-first. Only linear signal weights are fitted; safety caps remain hand-audited policy.",
   "rerun_when": [
     "scoring features or caps change",
     "provider, verifier, retrieval, or search behavior changes materially",
@@ -80,7 +80,7 @@
     "enough real user labels are collected for local calibration"
   ],
   "schema_version": 1,
-  "source": "benchmark_tuned",
+  "source": "benchmark_tuned_evidence_first_v2",
   "trained_at": "2026-05-05T12:45:14.302790+00:00",
   "validation_input": null
 }

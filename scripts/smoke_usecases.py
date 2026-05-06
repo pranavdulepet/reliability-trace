@@ -119,6 +119,12 @@ def assert_usable(name: str, graph: Dict[str, Any]) -> None:
     assert answer.get("verdict") in {"rely", "use_with_caution", "do_not_rely"}, f"{name}: missing verdict"
     assert answer.get("evidence_status"), f"{name}: missing evidence status"
     assert answer.get("main_uncertainty"), f"{name}: missing uncertainty"
+    assert answer.get("reliability_reason"), f"{name}: missing score reason"
+    assert answer.get("why_it_matters"), f"{name}: missing why-it-matters copy"
+    prompts = answer.get("improvement_prompts") or []
+    assert 2 <= len(prompts) <= 4, f"{name}: missing improvement prompts"
+    assert all(prompt.get("label") and prompt.get("prompt") and prompt.get("reason") for prompt in prompts), f"{name}: malformed improvement prompts"
+    assert answer.get("score_breakdown"), f"{name}: missing score breakdown"
     assert graph.get("analysis_basis"), f"{name}: missing research basis"
 
 
@@ -126,9 +132,9 @@ def print_case(name: str, graph: Dict[str, Any]) -> None:
     answer = graph["answer"]
     print(f"## {name}")
     print(f"- verdict: {answer['verdict']} ({answer['reliability_score']}/100)")
-    print(f"- evidence: {answer['evidence_status']}")
-    print(f"- uncertainty: {answer['main_uncertainty']}")
-    print(f"- next: {answer['next_best_action']}")
+    print(f"- reason: {answer['reliability_reason']}")
+    print(f"- why it matters: {answer['why_it_matters']}")
+    print(f"- repair prompt: {answer['improvement_prompts'][0]['label']} — {answer['improvement_prompts'][0]['prompt']}")
     print(f"- answer: {answer['final_answer'][:240].replace(chr(10), ' ')}")
     print()
 

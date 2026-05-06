@@ -57,6 +57,11 @@ Completed v2 graphs include:
 - `answer.verdict`: `rely`, `use_with_caution`, or `do_not_rely`
 - `answer.reliability_score`
 - `answer.reliability_explanation`
+- `answer.reliability_reason`
+- `answer.why_it_matters`
+- `answer.primary_risk`
+- `answer.improvement_prompts[]`
+- `answer.score_breakdown`
 - `answer.score_ready`
 - `answer.evidence_status`
 - `answer.main_uncertainty`
@@ -70,7 +75,7 @@ Completed v2 graphs include:
 - `run.search_used`
 - `web_search.calls[]`
 
-Reliability scoring is a 0-100 answer-trustability estimate under gathered evidence. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. Linear signal weights load from `configs/reliability_score_weights.json` when present; otherwise the built-in research-prior weights are used. The current tracked config is benchmark-tuned from official-style fixed-answer dev evals. Safety caps are not learned: they remain explicit policy for contradictions, missing required evidence, low-provenance partial support, sample conflict, and similar false-safe risks. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
+Reliability scoring is a 0-100 answer-trustability estimate under gathered evidence. Source-required questions are evidence-first: claim support, contradiction severity, retrieval alignment, and source quality dominate; stability can lower trust but cannot rescue unsupported factual claims. Open-ended explanations still use stability as a warning signal. Linear signal weights load from `configs/reliability_score_weights.json` when present; otherwise the built-in research-prior weights are used. The current tracked config is benchmark-tuned from official-style fixed-answer dev evals with an evidence-first product adjustment for source-required answers. Safety caps are not learned: they remain explicit policy for contradictions, missing required evidence, low-provenance partial support, sample conflict, and similar false-safe risks. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
 
 Claim checking has two layers. The selected provider extracts claims and assesses only the retrieved evidence snippets. A required NLI verifier then checks each claim/snippet pair and combines with the provider judgment conservatively: contradiction wins, missing evidence remains `not_found`, and provider/verifier disagreement becomes partial support unless the verifier finds contradiction. Source text is always treated as untrusted evidence, never instructions; provider output is schema-validated, retried once on invalid JSON, and redacted. Claims marked `not_checkable` remain unscored even if a provider returns a supported relation.
 
@@ -85,10 +90,11 @@ The frontend is a React + TypeScript app. It presents:
 - Entailment verifier readiness in Settings.
 - Search key and max-result controls in Settings. Chat does not expose a search off switch; web evidence is attempted automatically when configured.
 - One compact Reliability Score summary after the audit finishes.
-- One full reliability analysis drawer with Elicit-like sections: Overview, Evidence, Claims, Consistency, Robustness, Score, Activity, and Export.
+- A usefulness-first reliability block: score, reason for score, why it matters, and prompt chips that insert concrete follow-up requests into the composer.
+- One full reliability analysis drawer with Elicit-like sections: Evidence, Uncertainty, Score, Activity, and Export.
 - About page with the research basis and trace limits.
 
-The primary answer view is progressive: streamed answer first, inline/source citations when evidence exists, then the final Reliability Score and short explanation after the audit completes. Detailed evidence tables stay inside the analysis drawer. The frontend must not invent fallback verdicts or evidence states; incomplete graphs show an incomplete-analysis state.
+The primary answer view is progressive: streamed answer first, inline/source citations when evidence exists, then the final Reliability Score, concise reason, question-specific consequence, and improvement prompts after the audit completes. Detailed evidence tables stay inside the analysis drawer. The frontend must not invent fallback verdicts or evidence states; incomplete graphs show an incomplete-analysis state.
 
 ## Provider Boundary
 

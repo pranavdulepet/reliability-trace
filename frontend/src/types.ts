@@ -263,6 +263,16 @@ export interface ReliabilityGraph {
     recommendation: string | null;
     reliability_score: number;
     reliability_explanation?: string;
+    reliability_reason?: string;
+    why_it_matters?: string;
+    primary_risk?: string;
+    improvement_prompts?: Array<{ label: string; prompt: string; reason: string }>;
+    score_breakdown?: {
+      evidence?: number;
+      stability?: number;
+      source_quality?: number;
+      penalties?: string[];
+    };
     score_ready?: boolean;
     calibration_status: string;
     verdict?: "rely" | "use_with_caution" | "do_not_rely";

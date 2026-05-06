@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph, TraceSpan } from "./types";
 
-export const TABS = ["Overview", "Evidence", "Claims", "Consistency", "Robustness", "Score", "Activity", "Export"] as const;
+export const TABS = ["Evidence", "Uncertainty", "Score", "Activity", "Export"] as const;
 
 export type ReportTab = (typeof TABS)[number];
 
@@ -52,15 +52,12 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
 }
 
 function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
-  if (tab === "Overview") return <OverviewTab graph={graph} />;
-  if (tab === "Evidence") return <EvidenceSourcesTab graph={graph} />;
-  if (tab === "Claims") return <ClaimsAuditTab graph={graph} />;
-  if (tab === "Consistency") return <ConsistencyTab graph={graph} />;
-  if (tab === "Robustness") return <RobustnessTab graph={graph} />;
+  if (tab === "Evidence") return <EvidenceTab graph={graph} />;
+  if (tab === "Uncertainty") return <UncertaintyTab graph={graph} />;
   if (tab === "Score") return <ScoreTab graph={graph} />;
   if (tab === "Activity") return <ActivityTab graph={graph} />;
   if (tab === "Export") return <ExportTab graph={graph} />;
-  return <OverviewTab graph={graph} />;
+  return <EvidenceTab graph={graph} />;
 }
 
 function OverviewTab({ graph }: { graph: ReliabilityGraph }) {
@@ -86,6 +83,68 @@ function OverviewTab({ graph }: { graph: ReliabilityGraph }) {
         {issues.length === 0 ? <p className="empty-state">No blocking issue was found in the completed audit.</p> : <ul>{issues.map((issue) => <li key={`${issue.title}-${issue.detail}`}><strong>{issue.title}</strong><span>{issue.detail}</span></li>)}</ul>}
         <h3>Next step</h3>
         <p>{cleanNextAction(meta.nextAction ?? "", graph)}</p>
+      </section>
+    </div>
+  );
+}
+
+function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {
+  return (
+    <div className="evidence-lab-tab">
+      <ClaimsAuditTab graph={graph} />
+      <EvidenceSourcesTab graph={graph} />
+    </div>
+  );
+}
+
+function UncertaintyTab({ graph }: { graph: ReliabilityGraph }) {
+  const meta = answerMeta(graph);
+  const support = supportBreakdown(graph);
+  const issues = reliabilityIssues(graph).slice(0, 5);
+  const prompts = improvementPrompts(graph);
+  const stability = graph.answer.score_breakdown?.stability ?? Math.round((graph.features.semantic_stability ?? graph.disagreement.semantic_stability ?? 0) * 100);
+  return (
+    <div className="uncertainty-tab">
+      <section className="risk-summary">
+        <div>
+          <span>Primary risk</span>
+          <strong>{graph.answer.primary_risk || meta.uncertainty}</strong>
+        </div>
+        <div>
+          <span>Why it matters</span>
+          <p>{whyItMatters(graph)}</p>
+        </div>
+      </section>
+      <div className="consistency-grid compact-metrics">
+        <MetricTile label="Unsupported or contradicted" value={String(support.unsupported)} />
+        <MetricTile label="Partially supported" value={String(support.partial)} />
+        <MetricTile label="Stability" value={`${stability}%`} />
+        <MetricTile label="Sources" value={String(evidenceSourceRows(graph).length)} />
+      </div>
+      {issues.length > 0 && (
+        <section className="issue-list-block">
+          <h3>What to check</h3>
+          <ul>
+            {issues.map((issue) => (
+              <li key={`${issue.title}-${issue.detail}`}>
+                <strong>{issue.title}</strong>
+                <span>{issue.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <section className="issue-list-block">
+        <h3>Improve reliability</h3>
+        <div className="detail-prompt-list">
+          {prompts.map((prompt) => (
+            <article key={prompt.prompt}>
+              <strong>{prompt.label}</strong>
+              <p>{prompt.prompt}</p>
+              <small>{prompt.reason}</small>
+            </article>
+          ))}
+        </div>
       </section>
     </div>
   );
@@ -273,21 +332,15 @@ function RobustnessTab({ graph }: { graph: ReliabilityGraph }) {
 }
 
 function ScoreTab({ graph }: { graph: ReliabilityGraph }) {
+  const breakdown = scoreBreakdownRows(graph);
   return (
     <div className="methods-panel">
       <section className="method-section">
-        <h3>Score</h3>
-        <p>{calibrationCopy(graph)}</p>
-        <p className="panel-note">The Reliability Score estimates answer trustability under the gathered evidence. It is not proof, a guarantee, or a provider confidence score.</p>
-        {graph.score_caps.length > 0 && (
-          <div className="issue-list">
-            {graph.score_caps.map((cap) => (
-              <span key={cap}>{cap}</span>
-            ))}
-          </div>
-        )}
-        <div className="feature-list">
-          {scoreFeatureRows(graph).map(([label, value, meaning]) => (
+        <h3>Score breakdown</h3>
+        <p>{reliabilityReason(graph)}</p>
+        <p className="panel-note">Read the score as a risk-ranking aid for this answer. It is not proof or a guarantee.</p>
+        <div className="feature-list compact-feature-list">
+          {breakdown.map(([label, value, meaning]) => (
             <div key={label}>
               <strong>{value}</strong>
               <span>{label}</span>
@@ -295,10 +348,17 @@ function ScoreTab({ graph }: { graph: ReliabilityGraph }) {
             </div>
           ))}
         </div>
+        {graph.score_caps.length > 0 && (
+          <div className="issue-list">
+            {graph.score_caps.map((cap) => (
+              <span key={cap}>{cap}</span>
+            ))}
+          </div>
+        )}
       </section>
       {graph.analysis_basis && graph.analysis_basis.length > 0 && (
         <details className="nested-detail">
-          <summary>Method basis</summary>
+          <summary>Method notes</summary>
           <div className="compact-stack">
             {graph.analysis_basis.map((item) => (
               <article key={`${item.signal}-${item.method}`}>
@@ -372,7 +432,7 @@ function traceOutput(span: TraceSpan): string {
   }
 }
 
-export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
+export function ReliabilityCards({ graph, onUsePrompt }: { graph: ReliabilityGraph; onUsePrompt?: (prompt: string) => void }) {
   const meta = answerMeta(graph);
   if (!meta.complete) {
     return (
@@ -385,16 +445,34 @@ export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
       </section>
     );
   }
+  const prompts = improvementPrompts(graph);
   return (
     <section className={`reliability-score-panel verdict-${meta.verdict}`} aria-label="Reliability summary">
       <div className="score-panel-main">
         <span className={`decision-pill decision-${meta.verdict}`}>{meta.verdictLabel}</span>
-        <strong>Reliability Score {meta.score}/100</strong>
+        <strong>Reliability Score: {meta.score}/100</strong>
         <small>{scoreStatus(graph)}</small>
       </div>
       <div className="score-panel-copy">
-        <p>{graph.answer.reliability_explanation || graph.analysis_explanation || reliabilityOneLine(graph)}</p>
-        <small>Next: {cleanNextAction(meta.nextAction ?? "", graph)}</small>
+        <div>
+          <span>Reason</span>
+          <p>{reliabilityReason(graph)}</p>
+        </div>
+        <div>
+          <span>Why it matters</span>
+          <p>{whyItMatters(graph)}</p>
+        </div>
+      </div>
+      <div className="repair-panel">
+        <span>Improve reliability</span>
+        <div className="repair-chip-row">
+          {prompts.map((prompt) => (
+            <button key={prompt.prompt} type="button" className="repair-chip" onClick={() => onUsePrompt?.(prompt.prompt)} title={prompt.reason}>
+              <strong>{prompt.label}</strong>
+              <small>{prompt.reason}</small>
+            </button>
+          ))}
+        </div>
       </div>
     </section>
   );
@@ -422,13 +500,13 @@ export function AnswerCitations({ graph }: { graph: ReliabilityGraph }) {
 }
 
 export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
-  const [activeTab, setActiveTab] = useState<ReportTab>("Overview");
+  const [activeTab, setActiveTab] = useState<ReportTab>("Evidence");
   const meta = answerMeta(graph);
   return (
     <details className="analysis-drawer" data-reliability-section onToggle={handleDetailToggle} open={meta.verdict === "do_not_rely"}>
       <summary>
-        <span>Full reliability analysis</span>
-        <small>Evidence, claims, score</small>
+        <span>Details</span>
+        <small>Evidence, uncertainty, score</small>
       </summary>
       <div className="analysis-drawer-body">
         <nav className="analysis-tab-row" aria-label="Reliability analysis sections">
@@ -552,10 +630,65 @@ function uniqueLines(values: string[]): string[] {
 }
 
 function scoreStatus(graph: ReliabilityGraph): string {
-  if (graph.score_caps.length > 0) return "Capped by risk signals";
-  if (graph.answer.calibration_status === "benchmark_tuned" || graph.answer.calibration_status === "benchmark_tuned_diagnostic") return "Benchmark-tuned estimate";
-  if (graph.answer.calibration_status === "local_calibration") return "Locally calibrated estimate";
-  return "Research-prior estimate";
+  if (graph.score_caps.length > 0) return "Limited by audit findings";
+  if (graph.answer.final_decision === "rely" || graph.answer.verdict === "rely") return "Evidence supports use";
+  return "Needs review before use";
+}
+
+function reliabilityReason(graph: ReliabilityGraph): string {
+  return shortText(graph.answer.reliability_reason || graph.answer.reliability_explanation || graph.analysis_explanation || reliabilityOneLine(graph), 260);
+}
+
+function whyItMatters(graph: ReliabilityGraph): string {
+  const explicit = graph.answer.why_it_matters?.trim();
+  if (explicit) return explicit;
+  const questionType = graph.run.question_type;
+  if (questionType === "decision_qa" || questionType === "mixed") {
+    return "You are using this answer to make a decision, so unsupported assumptions can change the recommendation.";
+  }
+  if (questionType === "factual_qa" || questionType === "research_qa") {
+    return "Factual and current answers can be wrong or stale without direct source support.";
+  }
+  return "The score tells you how much of the answer was actually checked, not just how confident the wording sounds.";
+}
+
+function improvementPrompts(graph: ReliabilityGraph): Array<{ label: string; prompt: string; reason: string }> {
+  if (Array.isArray(graph.answer.improvement_prompts) && graph.answer.improvement_prompts.length > 0) {
+    return graph.answer.improvement_prompts.slice(0, 4);
+  }
+  const question = shortText(graph.run.question.replace(/\s+/g, " ").trim(), 110);
+  const support = supportBreakdown(graph);
+  const rows = claimAuditRows(graph);
+  const riskyClaim = rows.find((row) => ["contradicted", "not_found", "insufficient_evidence", "partially_supported"].includes(row.relation));
+  const claimText = riskyClaim?.claim ? shortText(riskyClaim.claim, 130) : "the highest-risk claim";
+  const prompts: Array<{ label: string; prompt: string; reason: string }> = [];
+  if (support.contradicted > 0) {
+    prompts.push({
+      label: "Resolve conflict",
+      prompt: `Re-check "${question}" against the cited sources and rewrite the parts that conflict with: "${claimText}".`,
+      reason: "Targets the contradiction first.",
+    });
+  }
+  if (support.notFound > 0 || externalEvidence(graph).length === 0) {
+    prompts.push({
+      label: "Find sources",
+      prompt: `Search for reliable sources for "${question}", cite them, and revise unsupported factual claims.`,
+      reason: "Adds direct evidence.",
+    });
+  }
+  if (support.partial > 0) {
+    prompts.push({
+      label: "Narrow claim",
+      prompt: `Rewrite the answer to "${question}" so this claim only says what the sources support: "${claimText}".`,
+      reason: "Prevents overstatement.",
+    });
+  }
+  prompts.push({
+    label: "Separate facts",
+    prompt: `Revise the answer to "${question}" by separating sourced facts, assumptions, and practical advice.`,
+    reason: "Makes weak points visible.",
+  });
+  return prompts.slice(0, 4);
 }
 
 function reliabilityOneLine(graph: ReliabilityGraph): string {
@@ -661,6 +794,24 @@ function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
   return featureLabels
     .filter(([key]) => graph.features[key] !== undefined)
     .map(([key, label, meaning]) => [label, formatPercent(graph.features[key]), meaning]);
+}
+
+function scoreBreakdownRows(graph: ReliabilityGraph): string[][] {
+  const breakdown = graph.answer.score_breakdown;
+  if (breakdown) {
+    return [
+      ["Evidence", `${breakdown.evidence ?? 0}%`, "How much the checked answer claims are supported by retrieved source evidence."],
+      ["Stability", `${breakdown.stability ?? 0}%`, "Whether alternate samples stayed close to the same answer."],
+      ["Source quality", `${breakdown.source_quality ?? 0}%`, "How strong the gathered source provenance looked for this answer."],
+      ["Penalties", String((breakdown.penalties ?? []).length), "Caps applied for contradictions, missing evidence, or unstable behavior."],
+    ];
+  }
+  return [
+    ["Evidence", formatPercent(graph.features.claim_support_rate), "Share of checked claims supported by source evidence."],
+    ["Stability", formatPercent(graph.features.semantic_stability), "Whether alternate samples stayed close to the same answer."],
+    ["Source quality", formatPercent(graph.features.source_quality_score), "How strong the gathered source provenance looked for this answer."],
+    ["Penalties", String(graph.score_caps.length), "Caps applied for contradictions, missing evidence, or unstable behavior."],
+  ];
 }
 
 type ClaimAuditRow = NonNullable<ReliabilityGraph["claim_audit"]>[number];

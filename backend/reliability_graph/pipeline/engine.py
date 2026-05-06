@@ -163,7 +163,7 @@ class ReliabilityPipeline:
         elif step_type == "signal_summary":
             public["signals_ready"] = True
         elif step_type == "reliability_scoring":
-            public["score_ready"] = False
+            public["score_computed"] = True
         elif step_type == "calibration_lookup":
             public["calibration_status"] = output.get("calibration_status")
         elif step_type == "perturbation_probe":
@@ -2125,6 +2125,23 @@ class ReliabilityPipeline:
             return "this question"
         return cleaned[:120]
 
+    def _question_is_recommendation(self, question: str) -> bool:
+        q = question.lower()
+        return any(
+            term in q
+            for term in [
+                "should",
+                "recommend",
+                "worth",
+                "choose",
+                "deciding whether",
+                "whether to",
+                "adopt",
+                "implement",
+                "best option",
+            ]
+        )
+
     def _is_high_stakes_question(self, question: str) -> bool:
         lowered = question.lower()
         terms = [
@@ -2474,12 +2491,47 @@ class ReliabilityPipeline:
             len(contradicted),
             len(checkable_assessments),
         )
+        primary_risk = self._primary_risk(
+            state,
+            claims_by_id,
+            contradicted,
+            source_gap_claims,
+            partially_supported,
+            no_source_factual,
+            perturbation_flip,
+        )
+        reliability_reason = self._reliability_reason(
+            state,
+            verdict,
+            score,
+            evidence_status,
+            claims_by_id,
+            supported,
+            partially_supported,
+            contradicted,
+            source_gap_claims,
+            no_source_factual,
+        )
+        why_it_matters = self._why_it_matters(state, primary_risk, contradicted, no_source_factual)
+        improvement_prompts = self._improvement_prompts(
+            state,
+            claims_by_id,
+            contradicted,
+            source_gap_claims,
+            partially_supported,
+            no_source_factual,
+        )
 
         return {
             "answer": {
                 "verdict": verdict,
                 "verdict_reason": verdict_reason,
                 "reliability_explanation": reliability_explanation,
+                "reliability_reason": reliability_reason,
+                "why_it_matters": why_it_matters,
+                "primary_risk": primary_risk,
+                "improvement_prompts": improvement_prompts,
+                "score_breakdown": self._score_breakdown(state),
                 "next_best_action": next_action,
                 "evidence_status": evidence_status,
                 "source_limitations": source_limitations,
@@ -2527,6 +2579,202 @@ class ReliabilityPipeline:
                 % (evidence_line, score, main_uncertainty, next_action),
             ]
         )
+
+    def _reliability_reason(
+        self,
+        state: Dict[str, Any],
+        verdict: str,
+        score: int,
+        evidence_status: str,
+        claims_by_id: Dict[str, Dict[str, Any]],
+        supported: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
+        contradicted: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        no_source_factual: bool,
+    ) -> str:
+        checked_count = len(supported) + len(partially_supported) + len(contradicted) + len(not_found)
+        if contradicted:
+            claim = self._short_claim(claims_by_id.get(contradicted[0]["claim_id"], {}).get("text"))
+            return "The score is capped because gathered evidence conflicts with this checked claim: %s" % claim
+        if no_source_factual:
+            return "The score is low because this question needs source evidence, but no usable web, URL, or file evidence was available."
+        if not_found:
+            claim = self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
+            return "The score is limited because %d source-checkable claim%s lacked evidence, including: %s" % (
+                len(not_found),
+                "" if len(not_found) == 1 else "s",
+                claim,
+            )
+        if partially_supported:
+            claim = self._short_claim(claims_by_id.get(partially_supported[0]["claim_id"], {}).get("text"))
+            return "The score is cautious because %d checked claim%s were only partly supported, including: %s" % (
+                len(partially_supported),
+                "" if len(partially_supported) == 1 else "s",
+                claim,
+            )
+        if checked_count and len(supported) == checked_count and state.get("semantic_stability", 1.0) < 0.55:
+            return "The sources support the checked claims, but alternate samples did not converge on one meaning."
+        if checked_count and len(supported) == checked_count:
+            return "The score rises because all %d checked factual claim%s had source support and no contradiction was found." % (
+                checked_count,
+                "" if checked_count == 1 else "s",
+            )
+        if verdict == "rely":
+            return "The score is high because the answer is source-backed enough for this question and no blocking risk was found."
+        if score < 50:
+            return "The score is low because the audit found weak evidence coverage or unstable answer behavior."
+        return "The score is cautious because the answer may be useful, but the audit found limits in evidence coverage or answer stability."
+
+    def _why_it_matters(
+        self,
+        state: Dict[str, Any],
+        primary_risk: str,
+        contradicted: List[Dict[str, Any]],
+        no_source_factual: bool,
+    ) -> str:
+        question = state["run"]["question"]
+        question_type = state.get("question_type")
+        if self._is_high_stakes_question(question):
+            return "This matters because medical, legal, financial, or safety-related answers can cause harm when unsupported."
+        if contradicted:
+            return "This matters because one contradicted claim can reverse the practical takeaway of the answer."
+        if no_source_factual:
+            return "This matters because factual answers can sound specific even when they have not been checked against evidence."
+        if question_type in {"decision_qa", "mixed"} or self._question_is_recommendation(question):
+            return "This matters because you are using the answer to make a decision; unsupported assumptions can change the recommendation."
+        if self._evidence_required_for_score(state):
+            return "This matters because current or source-required claims can be stale, incomplete, or wrong without source support."
+        if primary_risk and primary_risk != "No blocking risk found in the checked evidence.":
+            return "This matters because the main risk is in a specific checked claim, not just in the overall answer style."
+        return "This matters because the answer is useful as guidance, but the score tells you how much was actually checked."
+
+    def _primary_risk(
+        self,
+        state: Dict[str, Any],
+        claims_by_id: Dict[str, Dict[str, Any]],
+        contradicted: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
+        no_source_factual: bool,
+        perturbation_flip: bool,
+    ) -> str:
+        if contradicted:
+            return "Contradicted claim: %s" % self._short_claim(claims_by_id.get(contradicted[0]["claim_id"], {}).get("text"))
+        if perturbation_flip:
+            return "The answer changed under a pressure prompt without new evidence."
+        if no_source_factual:
+            return "No usable source evidence was available for a source-required question."
+        if not_found:
+            return "Unsupported claim: %s" % self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
+        if partially_supported:
+            return "Partly supported claim: %s" % self._short_claim(claims_by_id.get(partially_supported[0]["claim_id"], {}).get("text"))
+        if state.get("semantic_stability", 1.0) < 0.55:
+            return "Candidate answers did not agree enough on one meaning."
+        return "No blocking risk found in the checked evidence."
+
+    def _improvement_prompts(
+        self,
+        state: Dict[str, Any],
+        claims_by_id: Dict[str, Dict[str, Any]],
+        contradicted: List[Dict[str, Any]],
+        not_found: List[Dict[str, Any]],
+        partially_supported: List[Dict[str, Any]],
+        no_source_factual: bool,
+    ) -> List[Dict[str, str]]:
+        question = self._question_topic(state["run"]["question"])
+        prompts: List[Dict[str, str]] = []
+
+        def add(label: str, prompt: str, reason: str) -> None:
+            if len(prompts) >= 4:
+                return
+            if any(item["label"] == label or item["prompt"] == prompt for item in prompts):
+                return
+            prompts.append({"label": label, "prompt": prompt, "reason": reason})
+
+        if contradicted:
+            claim = self._short_claim(claims_by_id.get(contradicted[0]["claim_id"], {}).get("text"))
+            add(
+                "Resolve conflict",
+                'Re-check the answer to "%s" against the cited sources and rewrite the parts that conflict with this claim: "%s".'
+                % (question, claim),
+                "Targets the claim that most directly lowers trust.",
+            )
+        if no_source_factual:
+            add(
+                "Find sources",
+                'Search for reliable primary or high-quality sources for "%s", cite them, and revise any unsupported factual claims.'
+                % question,
+                "Adds the missing evidence needed for a source-required answer.",
+            )
+        if not_found:
+            claim = self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
+            add(
+                "Verify claim",
+                'Find direct source evidence for this claim from the answer to "%s": "%s". If none exists, rewrite the answer more cautiously.'
+                % (question, claim),
+                "Turns an unsupported claim into a checked claim or removes it.",
+            )
+        if partially_supported:
+            claim = self._short_claim(claims_by_id.get(partially_supported[0]["claim_id"], {}).get("text"))
+            add(
+                "Strengthen evidence",
+                'Look for stronger evidence for this partially supported claim about "%s": "%s", then update the answer with the narrower supported wording.'
+                % (question, claim),
+                "Narrows claims to what the sources actually support.",
+            )
+        if state.get("semantic_stability", 1.0) < 0.55:
+            add(
+                "Check stability",
+                'Answer "%s" again using the same evidence, list the assumptions, and explain where alternate answers would differ.'
+                % question,
+                "Exposes whether the answer changes under reasonable restatements.",
+            )
+        if state.get("question_type") in {"decision_qa", "mixed"} or self._question_is_recommendation(state["run"]["question"]):
+            add(
+                "Decision brief",
+                'Turn the answer to "%s" into a decision brief: recommendation, assumptions, evidence, risks, and what would change the recommendation.'
+                % question,
+                "Makes the decision logic and weak points explicit.",
+            )
+        add(
+            "Separate facts",
+            'Revise the answer to "%s" by separating sourced facts, assumptions, and practical advice. Keep only claims that can be supported.'
+            % question,
+            "Makes it clear which parts are evidence-backed.",
+        )
+        add(
+            "Ask for constraints",
+            'Before improving the answer to "%s", ask me for the missing constraints that would change the answer.'
+            % question,
+            "Prevents overconfident advice when user context matters.",
+        )
+        return prompts[:4]
+
+    def _score_breakdown(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        features = state.get("features", {})
+        evidence = (
+            0.60 * float(features.get("claim_support_rate", 0.0))
+            + 0.25 * float(features.get("retrieval_alignment_score", 0.0))
+            + 0.15 * float(features.get("retrieval_peak_score", 0.0))
+        )
+        stability = (
+            0.55 * float(features.get("semantic_stability", 0.0))
+            + 0.45 * float(features.get("sample_overlap_stability", features.get("semantic_stability", 0.0)))
+        )
+        stability *= max(0.0, 1.0 - float(features.get("sample_conflict_rate", 0.0)))
+        return {
+            "evidence": int(round(max(0.0, min(1.0, evidence)) * 100)),
+            "stability": int(round(max(0.0, min(1.0, stability)) * 100)),
+            "source_quality": int(round(max(0.0, min(1.0, float(features.get("source_quality_score", 0.0)))) * 100)),
+            "penalties": list(state.get("score_caps", []))[:6],
+        }
+
+    def _short_claim(self, value: Optional[str], max_length: int = 150) -> str:
+        text = re.sub(r"\s+", " ", str(value or "a checked claim")).strip()
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 1].rstrip() + "..."
 
     def _main_uncertainty(
         self,
@@ -3040,6 +3288,9 @@ class ReliabilityPipeline:
             "final_decision",
             "verdict_reason",
             "reliability_explanation",
+            "reliability_reason",
+            "why_it_matters",
+            "primary_risk",
             "evidence_status",
             "main_uncertainty",
             "next_best_action",
@@ -3067,6 +3318,31 @@ class ReliabilityPipeline:
                 "Completed graph must mark the Reliability Score as ready.",
                 retryable=False,
             )
+        if graph.get("graph_version") == GRAPH_VERSION:
+            prompts = answer.get("improvement_prompts")
+            if not isinstance(prompts, list) or not (2 <= len(prompts) <= 4):
+                raise PipelineStageError(
+                    "invalid_reliability_graph",
+                    "graph_validation",
+                    "Reliability graph must include 2-4 improvement prompts.",
+                    retryable=False,
+                )
+            for prompt in prompts:
+                if not isinstance(prompt, dict) or not all(str(prompt.get(field) or "").strip() for field in ["label", "prompt", "reason"]):
+                    raise PipelineStageError(
+                        "invalid_reliability_graph",
+                        "graph_validation",
+                        "Improvement prompts must include label, prompt, and reason.",
+                        retryable=False,
+                    )
+            breakdown = answer.get("score_breakdown")
+            if not isinstance(breakdown, dict) or not all(key in breakdown for key in ["evidence", "stability", "source_quality", "penalties"]):
+                raise PipelineStageError(
+                    "invalid_reliability_graph",
+                    "graph_validation",
+                    "Reliability graph is missing reduced score breakdown.",
+                    retryable=False,
+                )
         if not graph.get("analysis_basis"):
             raise PipelineStageError(
                 "invalid_reliability_graph",

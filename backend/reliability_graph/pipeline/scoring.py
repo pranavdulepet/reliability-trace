@@ -5,11 +5,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 DEFAULT_EVIDENCE_REQUIRED_WEIGHTS = {
-    "claim_support_rate": 0.30,
+    "claim_support_rate": 0.42,
     "retrieval_alignment_score": 0.20,
-    "source_quality_score": 0.14,
-    "sample_overlap_stability": 0.14,
-    "semantic_stability": 0.14,
+    "source_quality_score": 0.15,
+    "sample_overlap_stability": 0.07,
+    "semantic_stability": 0.08,
     "retrieval_peak_score": 0.08,
 }
 

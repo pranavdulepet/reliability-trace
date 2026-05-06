@@ -88,6 +88,11 @@ def test_provider_strict_pipeline_builds_graph(monkeypatch):
     assert graph["evidence_sources"] == []
     assert graph["score_model_version"]
     assert graph["score_inputs"]["features"]
+    assert graph["answer"]["reliability_reason"]
+    assert graph["answer"]["why_it_matters"]
+    assert graph["answer"]["primary_risk"]
+    assert len(graph["answer"]["improvement_prompts"]) >= 2
+    assert {"evidence", "stability", "source_quality", "penalties"} <= set(graph["answer"]["score_breakdown"])
     assert graph["answer"]["final_answer"].startswith("Proceed only")
     assert graph["claim_assessments"][0]["assessment_method"] == "provider_entailment_verifier"
     assert graph["export"]["contains_plaintext_provider_keys"] is False
@@ -325,6 +330,46 @@ def test_reliability_summary_names_partial_support_without_generic_action():
     assert "partially support 1" in summary["answer"]["evidence_status"]
     assert "partially supported claim" in summary["answer"]["next_best_action"]
     assert "reliability cards" not in summary["answer"]["next_best_action"].lower()
+    assert "partly supported" in summary["answer"]["reliability_reason"]
+    assert any("RAG response quality" in prompt["prompt"] for prompt in summary["answer"]["improvement_prompts"])
+
+
+def test_reliability_repair_for_no_source_factual_question_is_specific():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    state = {
+        "run": base_run(question="What is the current release date for ExampleOS 9?"),
+        "question_type": "factual_qa",
+        "claims": [
+            {"claim_id": "c1", "text": "ExampleOS 9 was released on April 2, 2026.", "importance": "high"},
+        ],
+        "claim_assessments": [
+            {"claim_id": "c1", "status": "insufficient_evidence", "relation": "not_found"},
+        ],
+        "evidence": [],
+        "perturbation_probe": {"available": False, "results": []},
+        "provider_error": None,
+        "structured_analysis_error": None,
+        "decision_analysis": {"applicable": False},
+        "assumptions": [],
+        "semantic_stability": 0.8,
+        "score": 45,
+        "score_caps": ["no evidence retrieval for source-required question: score capped at 45"],
+        "features": {
+            "claim_support_rate": 0.0,
+            "retrieval_alignment_score": 0.0,
+            "retrieval_peak_score": 0.0,
+            "source_quality_score": 0.0,
+            "semantic_stability": 0.8,
+            "sample_overlap_stability": 0.8,
+        },
+    }
+
+    summary = pipeline._reliability_summary(state)
+
+    assert "no usable web, URL, or file evidence" in summary["answer"]["reliability_reason"]
+    assert "specific" in summary["answer"]["why_it_matters"]
+    assert summary["answer"]["score_breakdown"]["evidence"] == 0
+    assert any("ExampleOS 9" in prompt["prompt"] and "Search" in prompt["prompt"] for prompt in summary["answer"]["improvement_prompts"])
 
 
 def test_eval_claim_extraction_skips_source_grounding_meta_claims():
