@@ -340,6 +340,10 @@ function App() {
         const parsed = JSON.parse(event.data) as StreamEvent;
         setEvents((current) => [...current, parsed]);
       });
+      source.addEventListener("audit_progress", (event) => {
+        const parsed = JSON.parse(event.data) as StreamEvent;
+        setEvents((current) => [...current, parsed]);
+      });
       source.addEventListener("answer_delta", (event) => {
         const parsed = JSON.parse(event.data) as StreamEvent;
         setStreamingAnswer((current) => current + (parsed.delta ?? ""));
@@ -644,7 +648,7 @@ function PendingAssistant({
           <div className="typing-line" role="status">Starting answer</div>
         )}
         {!graph && streamingAnswer && <div className="checking-line" role="status">Checking reliability...</div>}
-        <ActivityTrace events={events} progress={progress} defaultOpen />
+        <ActivityTrace events={events} progress={progress} />
         {graph && (
           <>
             <AnswerCitations graph={graph} />

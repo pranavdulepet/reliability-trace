@@ -4,10 +4,12 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Implemented
 
-- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, reliability cards, explainable info popovers, collapsed details, About, Settings, and JSON export.
+- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, one post-audit Reliability Score summary, an Elicit-like full-analysis drawer, About, Settings, and JSON export.
 - FastAPI backend with SQLite persistence, conversation/message storage, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
 - Provider adapters for Tinker, OpenAI, Claude, Gemini, and OpenRouter behind one backend-only boundary.
-- Provider-strict Reliability Evidence Graph pipeline with provider answer generation, structured claim extraction, structured assumptions, structured evidence assessment, attachment-scoped retrieval, claim-to-source matching, disagreement, static risk checks, scoring features, score caps, calibration status, and provider-neutral perturbation metadata.
+- Provider-strict v2 Reliability Evidence Graph pipeline with provider answer generation, evidence packet building, structured claim extraction, structured assumptions, structured evidence assessment, attachment/web scoped retrieval, claim-to-source matching, disagreement, static risk checks, scoring features, score caps, calibration metadata, and provider-neutral perturbation metadata.
+- Local persistence of completed v2 graphs in SQLite `runs.graph_json` and traces in `runs.trace_json`; exports return the stored graph.
+- SSE contract where `answer_delta` streams the answer, `audit_progress` reports audit stages, and `completed` is the first event containing the final Reliability Score.
 - Answer-specific verdicts, evidence status, uncertainty, next action, source limitations, and claim relations.
 - Provider-backed structured claim extraction, assumption extraction, decision framing, and evidence assessment with strict JSON validation, retry on invalid JSON, redaction, and stage-specific failure when required provider work fails.
 - Required NLI entailment-verifier boundary for claim/source relations, including setup health, Settings readiness, setup script, and graph fields for verifier scores.

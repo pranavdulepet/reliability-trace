@@ -6,7 +6,7 @@ Read this first when modifying the repo.
 
 ReliabilityGraph answers one question: should the user trust this answer? The product must show observable evidence, not hidden chain-of-thought. Every assistant answer can produce a Reliability Evidence Graph that can be inspected and exported.
 
-The primary UI is multi-turn Chat. Users connect at least one LLM provider in Settings, ask questions in a thread, and optionally attach files or URLs in the composer. Normal chat attempts web evidence automatically when a search key is configured; there is no main-canvas search off switch. The answer streams first, followed by inline/source citations when evidence exists, reliability cards, and expandable activity/details. Do not put provider selection or source management on the main chat canvas.
+The primary UI is multi-turn Chat. Users connect at least one LLM provider in Settings, ask questions in a thread, and optionally attach files or URLs in the composer. Normal chat attempts web evidence automatically when a search key is configured; there is no main-canvas search off switch. The answer streams first. Reliability appears only after the full audit finishes: inline/source citations, one final Reliability Score with a short explanation, and a single full-analysis drawer. Do not put provider selection or source management on the main chat canvas.
 
 For implementation status, read `docs/PLAN_STATUS.md` before assuming a section of `plan.md` is already complete.
 
@@ -16,7 +16,9 @@ For implementation status, read `docs/PLAN_STATUS.md` before assuming a section 
 - Saved keys are encrypted in backend storage and displayed only as fingerprints.
 - Production chat is provider-strict: never substitute local synthetic answers, fallback claim extraction, or heuristic claim/source judgments when provider or verifier work fails.
 - A ready local NLI entailment verifier is required for chat runs. Eval-only fixed-answer paths may use fixtures; user chat may not.
-- The reliability score is a benchmark-tuned diagnostic score, not a calibrated probability. Linear weights live in `configs/reliability_score_weights.json`; safety caps remain explicit policy, not learned weights.
+- Completed production graphs use `graph_version: "v2"` and are stored locally in `runs.graph_json`; traces are stored in `runs.trace_json`. Exports return the stored graph.
+- The Reliability Score is a benchmark-tuned 0-100 estimate of answer trustability under gathered evidence, not proof or a provider confidence score. Linear weights live in `configs/reliability_score_weights.json`; safety caps remain explicit policy, not learned weights.
+- Do not emit or display a Reliability Score before the full audit completes.
 - The frontend must not invent fallback verdicts, evidence states, or reliability metrics. If required graph fields are missing, show an incomplete-analysis state.
 - Do not count trace completeness, hard-coded rubric values, or fake decision utilities as truth evidence.
 - Closed-model behavior is observable evidence only.

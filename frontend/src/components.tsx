@@ -491,6 +491,15 @@ function compactEvents(events: StreamEvent[]): StreamEvent[] {
 export function formatTraceOutput(span: TraceSpan): string {
   const parsed = parseOutput(span.output_summary);
   if (!parsed) return span.output_summary;
+  if (Array.isArray(parsed.substeps)) {
+    const names = parsed.substeps
+      .map((step: { step?: string }) => String(step.step || "").replaceAll("_", " "))
+      .filter(Boolean);
+    if (span.type === "answer_generation") return `Answer generated${names.length ? ` after ${names.join(", ")}` : ""}.`;
+    if (span.type === "evidence_build") return `Evidence packet built${names.length ? ` through ${names.join(", ")}` : ""}.`;
+    if (span.type === "claim_audit") return `Claims audited${names.length ? ` through ${names.join(", ")}` : ""}.`;
+    if (span.type === "score_and_report") return "Final score and reliability report prepared.";
+  }
   if (span.type === "research_router") {
     const route = parsed.route?.route ? String(parsed.route.route).replaceAll("_", " ") : "no search";
     const reason = parsed.route?.reason ? ` ${parsed.route.reason}` : "";
@@ -539,7 +548,7 @@ export function formatTraceOutput(span: TraceSpan): string {
   }
   if (span.type === "reliability_scoring") {
     const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";
-    return `Diagnostic score ${parsed.score ?? "n/a"}/100.${caps}`;
+    return `Reliability Score ${parsed.score ?? "n/a"}/100.${caps}`;
   }
   if (span.type === "calibration_lookup") {
     return `Calibration: ${String(parsed.calibration_status ?? "unknown").replaceAll("_", " ")}.`;

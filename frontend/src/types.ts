@@ -155,6 +155,8 @@ export interface CandidateAnswer {
 export interface Claim {
   claim_id: string;
   text: string;
+  answer_quote?: string;
+  source_sentence?: string;
   type: string;
   importance: string;
   checkability: string;
@@ -236,6 +238,10 @@ export interface StressTest {
 }
 
 export interface ReliabilityGraph {
+  graph_version?: string;
+  audit_status?: "running" | "completed" | "failed";
+  audit_completed_at?: string;
+  score_model_version?: string;
   run: {
     run_id: string;
     conversation_id?: string | null;
@@ -256,6 +262,8 @@ export interface ReliabilityGraph {
     summary: string;
     recommendation: string | null;
     reliability_score: number;
+    reliability_explanation?: string;
+    score_ready?: boolean;
     calibration_status: string;
     verdict?: "rely" | "use_with_caution" | "do_not_rely";
     final_decision?: "rely" | "use_with_caution" | "do_not_rely";
@@ -275,6 +283,48 @@ export interface ReliabilityGraph {
   claims: Claim[];
   evidence: EvidenceItem[];
   claim_assessments: ClaimAssessment[];
+  claim_audit?: Array<{
+    claim_id: string;
+    claim: string;
+    answer_quote?: string;
+    claim_type?: string;
+    checkability?: string;
+    importance?: string;
+    relation: "supported" | "partially_supported" | "contradicted" | "not_found" | "not_checkable" | "insufficient_evidence";
+    severity?: string;
+    evidence_ids: string[];
+    why?: string;
+    limitation?: string;
+    provider_relation?: string;
+    assessment_method?: string;
+    verifier?: string;
+    entailment_score?: number | null;
+    contradiction_score?: number | null;
+    neutral_score?: number | null;
+    support_score?: number | null;
+    risk_flags?: string[];
+  }>;
+  evidence_sources?: Array<{
+    source_id: string;
+    title: string;
+    url?: string | null;
+    source_type: string;
+    quality: string;
+    freshness: string;
+    match_count: number;
+    claim_ids: string[];
+    evidence_ids: string[];
+    relations: Record<string, number>;
+    top_snippet: string;
+    top_relevance: number;
+  }>;
+  source_quality?: Array<{
+    source_id: string;
+    title: string;
+    quality: string;
+    freshness: string;
+    reason: string;
+  }>;
   assumptions: Assumption[];
   decision_analysis: DecisionAnalysis;
   disagreement: {
@@ -327,10 +377,32 @@ export interface ReliabilityGraph {
       [key: string]: unknown;
     };
   };
+  calibration_metadata?: ReliabilityGraph["calibration"];
   perturbation_probe?: PerturbationProbe;
   causal_probe: PerturbationProbe;
+  consistency_checks?: {
+    sample_count: number;
+    sample_agreement: number;
+    semantic_entropy: number;
+    semantic_clusters: ReliabilityGraph["disagreement"]["semantic_clusters"];
+    sample_overlap_stability?: number;
+    sample_conflict_rate?: number;
+  };
+  robustness_checks?: {
+    available: boolean;
+    mode?: string;
+    results: PerturbationProbe["results"];
+    unsupported_flip_count: number;
+  };
   features: Record<string, number>;
+  score_inputs?: {
+    features: Record<string, number>;
+    caps: string[];
+    weights?: Record<string, unknown>;
+    score_model_version?: string;
+  };
   score_caps: string[];
+  analysis_explanation?: string;
   analysis_basis?: Array<{
     signal: string;
     method: string;
@@ -359,7 +431,7 @@ export interface PerturbationProbe {
 }
 
 export interface StreamEvent {
-  type: "progress" | "answer_delta" | "answer_completed" | "completed" | "error";
+  type: "progress" | "audit_progress" | "answer_delta" | "answer_completed" | "completed" | "error";
   progress?: number;
   message: string;
   delta?: string;

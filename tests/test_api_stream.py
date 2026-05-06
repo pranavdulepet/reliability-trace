@@ -32,9 +32,16 @@ def test_run_event_stream_completes_without_shadowing_run_state(tmp_path, monkey
     with TestClient(api_module.app) as client:
         with client.stream("GET", f"/api/runs/{run['run_id']}/events") as response:
             body = "".join(response.iter_text())
+        export_response = client.get(f"/api/runs/{run['run_id']}/export")
+    completed = storage.get_run(api_module.settings.user_id, run["run_id"])
 
     assert response.status_code == 200
+    assert export_response.status_code == 200
+    assert export_response.json() == completed["graph"]
+    assert completed["graph"]["graph_version"] == "v2"
     assert body.index("event: answer_delta") < body.index("event: completed")
+    assert "event: audit_progress" in body
+    assert "reliability_score" not in body.split("event: completed", 1)[0]
     assert "event: completed" in body
     assert "Reliability Evidence Graph ready" in body
     assert "UnboundLocalError" not in body

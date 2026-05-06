@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { SyntheticEvent } from "react";
 import type { ClaimAssessment, EvidenceItem, ReliabilityGraph, TraceSpan } from "./types";
 
-export const TABS = ["Summary", "Issues", "Evidence", "Consistency", "Methods"] as const;
+export const TABS = ["Overview", "Evidence", "Claims", "Consistency", "Robustness", "Score", "Activity", "Export"] as const;
 
 export type ReportTab = (typeof TABS)[number];
 
@@ -52,202 +52,164 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
 }
 
 function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
-  if (tab === "Summary") return <AnswerTab graph={graph} />;
-  if (tab === "Issues") return <IssuesTab graph={graph} />;
-  if (tab === "Evidence") return <EvidenceReviewTab graph={graph} />;
+  if (tab === "Overview") return <OverviewTab graph={graph} />;
+  if (tab === "Evidence") return <EvidenceSourcesTab graph={graph} />;
+  if (tab === "Claims") return <ClaimsAuditTab graph={graph} />;
   if (tab === "Consistency") return <ConsistencyTab graph={graph} />;
-  if (tab === "Methods") return <MethodsTab graph={graph} />;
-  return <AnswerTab graph={graph} />;
+  if (tab === "Robustness") return <RobustnessTab graph={graph} />;
+  if (tab === "Score") return <ScoreTab graph={graph} />;
+  if (tab === "Activity") return <ActivityTab graph={graph} />;
+  if (tab === "Export") return <ExportTab graph={graph} />;
+  return <OverviewTab graph={graph} />;
 }
 
-function AnswerTab({ graph }: { graph: ReliabilityGraph }) {
+function OverviewTab({ graph }: { graph: ReliabilityGraph }) {
   const meta = answerMeta(graph);
+  const issues = reliabilityIssues(graph).slice(0, 4);
   return (
-    <div className="summary-layout">
-      <section className="score-summary">
-        <div className="score-ring">
-          <strong>{graph.answer.reliability_score}</strong>
-          <span>/100</span>
-        </div>
+    <div className="overview-layout">
+      <section className="overview-score">
         <div>
-          <h3>{meta.verdictLabel}</h3>
-          <p>{meta.reason}</p>
+          <span className={`decision-pill decision-${meta.verdict}`}>{meta.verdictLabel}</span>
+          <strong>{graph.answer.reliability_score}/100</strong>
+          <p>{graph.answer.reliability_explanation || graph.analysis_explanation || reliabilityOneLine(graph)}</p>
         </div>
       </section>
-      <section className="answer-main">
-        <h3>Answer</h3>
-        <MarkdownText text={graph.answer.final_answer} />
-        {graph.answer.recommendation && (
-          <>
-            <h3>Recommendation</h3>
-            <p>{graph.answer.recommendation}</p>
-          </>
-        )}
-        <h3>Main Uncertainty</h3>
-        <p>{meta.uncertainty}</p>
-        <h3>What Would Change The Answer</h3>
-        <p>{meta.change}</p>
+      <section className="overview-grid">
+        <MetricTile label="Sources" value={String(evidenceSourceRows(graph).length)} />
+        <MetricTile label="Claims checked" value={String(supportBreakdown(graph).total)} />
+        <MetricTile label="Claim support" value={formatPercent(graph.features.claim_support_rate)} />
+        <MetricTile label="Sample agreement" value={formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability)} />
       </section>
-      <aside className="signal-panel">
-        <h3>Useful Signals</h3>
-        <ul>{graph.answer.top_positive_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-        <h3>Risk Signals</h3>
-        <ul>{graph.answer.top_negative_signals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-        <h3>Recommended Action</h3>
-        <p>{meta.nextAction}</p>
-      </aside>
-    </div>
-  );
-}
-
-function IssuesTab({ graph }: { graph: ReliabilityGraph }) {
-  const meta = answerMeta(graph);
-  if (!meta.complete) {
-    return <p className="empty-state">Reliability analysis incomplete: {meta.incompleteReason}</p>;
-  }
-  const issues = reliabilityIssues(graph);
-  const supportingSignals = uniqueLines(graph.answer.top_positive_signals).slice(0, 3);
-  return (
-    <div className="issue-panel">
-      <section>
+      <section className="overview-actions">
         <h3>What to check first</h3>
-        {issues.length === 0 ? (
-          <p className="empty-state">No blocking reliability issue was found. The score still is not a truth guarantee.</p>
-        ) : (
-          <ol className="issue-priority-list">
-            {issues.map((issue) => (
-              <li key={issue.title}>
-                <strong>{issue.title}</strong>
-                <span>{issue.detail}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </section>
-      <section>
+        {issues.length === 0 ? <p className="empty-state">No blocking issue was found in the completed audit.</p> : <ul>{issues.map((issue) => <li key={`${issue.title}-${issue.detail}`}><strong>{issue.title}</strong><span>{issue.detail}</span></li>)}</ul>}
         <h3>Next step</h3>
         <p>{cleanNextAction(meta.nextAction ?? "", graph)}</p>
-        {supportingSignals.length > 0 && (
-          <>
-            <h3>Supporting signals</h3>
-            <ul>{supportingSignals.map((signal) => <li key={signal}>{signal}</li>)}</ul>
-          </>
-        )}
       </section>
     </div>
   );
 }
 
-function EvidenceReviewTab({ graph }: { graph: ReliabilityGraph }) {
-  const assessments = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
+function ClaimsAuditTab({ graph }: { graph: ReliabilityGraph }) {
   const evidenceById = new Map(graph.evidence.map((item) => [item.evidence_id, item]));
-  const claimRows = graph.claims
-    .map((claim) => ({ claim, assessment: assessments.get(claim.claim_id) }))
-    .sort((left, right) => claimRiskRank(left.assessment, left.claim.checkability) - claimRiskRank(right.assessment, right.claim.checkability));
-  const evidenceGroups = groupedEvidence(graph);
-
+  const rows = claimAuditRows(graph).sort((left, right) => claimAuditRiskRank(left.relation, left.severity) - claimAuditRiskRank(right.relation, right.severity));
   return (
-    <div className="evidence-review">
-      <section>
-        <div className="detail-heading">
-          <h3>Claim checks</h3>
-          <p>{claimRows.length} claim{claimRows.length === 1 ? "" : "s"} checked or classified.</p>
-        </div>
-        {claimRows.length === 0 ? (
-          <p className="empty-state">No claim checks were returned for this answer.</p>
-        ) : (
-          <div className="claim-list">
-            {claimRows.map(({ claim, assessment }) => {
-              const relation = claimRelation(assessment, claim.checkability);
-              const matchedEvidence = (assessment?.evidence_ids ?? []).map((id) => evidenceById.get(id)).filter((item): item is EvidenceItem => Boolean(item));
-              return (
-                <article className={`claim-row relation-${relationClass(relation)}`} key={claim.claim_id}>
-                  <header>
-                    <RelationPill relation={relation} />
-                    <strong>{claim.text}</strong>
-                  </header>
-                  <div className="claim-meta">
-                    <span>{formatStatus(claim.type)}</span>
-                    <span>{formatStatus(claim.importance)} importance</span>
-                    <span>{methodLabel(assessment, relation)}</span>
-                  </div>
-                  <details className="claim-detail" open={relation === "contradicted" || relation === "not_found"}>
-                    <summary>{relation === "supported" ? "View evidence" : "Why this matters"}</summary>
-                    <p>{assessment?.why ?? assessment?.explanation ?? relationExplanation(relation)}</p>
-                    <p>{assessment?.source_limit ?? evidenceLimitText(relation, matchedEvidence.length)}</p>
-                    {matchedEvidence.length > 0 && (
-                      <ul className="evidence-snippet-list">
-                        {matchedEvidence.slice(0, 3).map((item) => (
-                          <li key={item.evidence_id}>
-                            <strong>{item.source_title || item.source_url || "Source"}</strong>
-                            <span>{item.snippet}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </details>
-                </article>
-              );
-            })}
+    <div className="analysis-table-shell">
+      <div className="detail-heading">
+        <h3>Claim audit</h3>
+        <p>{rows.length} atomic item{rows.length === 1 ? "" : "s"} checked or classified.</p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty-state">No claim audit rows were returned.</p>
+      ) : (
+        <div className="analysis-table claim-audit-table">
+          <div className="analysis-table-head">
+            <span>Status</span>
+            <span>Claim</span>
+            <span>Evidence</span>
+            <span>Why</span>
           </div>
-        )}
-      </section>
-      <section>
-        <div className="detail-heading">
-          <h3>Sources used</h3>
-          <p>{evidenceGroups.length === 0 ? "No external evidence was available." : `${evidenceGroups.length} grouped source${evidenceGroups.length === 1 ? "" : "s"}.`}</p>
-        </div>
-        {evidenceGroups.length === 0 ? (
-          <p className="empty-state">No attached, fetched, or web source was used for claim checking.</p>
-        ) : (
-          <div className="source-list">
-            {evidenceGroups.map((group) => (
-              <article className="source-row" key={group.key}>
-                <header>
-                  <div>
-                    {group.url ? (
-                      <a href={group.url} rel="noreferrer" target="_blank">
-                        {group.title}
+          {rows.map((row) => {
+            const matchedEvidence = row.evidence_ids.map((id) => evidenceById.get(id)).filter((item): item is EvidenceItem => Boolean(item));
+            return (
+              <article className={`analysis-row relation-${relationClass(row.relation)}`} key={row.claim_id}>
+                <div>
+                  <RelationPill relation={row.relation} />
+                  <small>{formatStatus(row.severity || "low")} risk</small>
+                </div>
+                <div>
+                  <strong>{row.claim}</strong>
+                  <small>{formatStatus(row.claim_type || "claim")} · {formatStatus(row.importance || "medium")} importance</small>
+                </div>
+                <div>
+                  {matchedEvidence.length === 0 ? (
+                    <small>{row.relation === "not_checkable" ? "No source required" : "No matched source"}</small>
+                  ) : (
+                    matchedEvidence.slice(0, 2).map((item) => (
+                      <a href={item.source_url || undefined} key={item.evidence_id} rel="noreferrer" target={item.source_url ? "_blank" : undefined}>
+                        {item.source_title || item.source_url || item.evidence_id}
                       </a>
-                    ) : (
-                      <strong>{group.title}</strong>
-                    )}
-                    <span>
-                      {formatStatus(group.type)} · {group.matches} match{group.matches === 1 ? "" : "es"} · {formatStatus(group.quality)}
-                    </span>
-                  </div>
-                  <RelationPill relation={group.relation} />
-                </header>
-                {group.snippets[0] && <p>{shortText(group.snippets[0], 420)}</p>}
+                    ))
+                  )}
+                </div>
+                <div>
+                  <p>{row.why || relationExplanation(row.relation)}</p>
+                  {row.limitation && <small>{row.limitation}</small>}
+                </div>
               </article>
-            ))}
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EvidenceSourcesTab({ graph }: { graph: ReliabilityGraph }) {
+  const rows = evidenceSourceRows(graph);
+  return (
+    <div className="analysis-table-shell">
+      <div className="detail-heading">
+        <h3>Evidence</h3>
+        <p>{rows.length === 0 ? "No external evidence was available." : `${rows.length} source${rows.length === 1 ? "" : "s"} used for checking.`}</p>
+      </div>
+      {rows.length === 0 ? (
+        <p className="empty-state">No attached, pasted URL, or web source was available for source-grounded checking.</p>
+      ) : (
+        <div className="analysis-table evidence-table">
+          <div className="analysis-table-head">
+            <span>Source</span>
+            <span>Quality</span>
+            <span>Matches</span>
+            <span>Best snippet</span>
           </div>
-        )}
-      </section>
+          {rows.map((row) => (
+            <article className="analysis-row" key={row.source_id}>
+              <div>
+                {row.url ? (
+                  <a href={row.url} rel="noreferrer" target="_blank">{row.title}</a>
+                ) : (
+                  <strong>{row.title}</strong>
+                )}
+                <small>{formatStatus(row.source_type)} · {formatStatus(row.freshness)}</small>
+              </div>
+              <div>
+                <span className={`source-quality source-quality-${row.quality}`}>{formatStatus(row.quality)}</span>
+              </div>
+              <div>
+                <strong>{row.match_count}</strong>
+                <small>{relationSummary(row.relations)}</small>
+              </div>
+              <div>
+                <p>{row.top_snippet ? shortText(row.top_snippet, 320) : "No snippet returned."}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 function ConsistencyTab({ graph }: { graph: ReliabilityGraph }) {
-  const probe = graph.perturbation_probe ?? graph.causal_probe;
-  const changed = probe.results.filter((result) => result.answer_changed).length;
-  const unsupportedFlips = probe.results.filter((result) => result.unsupported_flip).length;
+  const checks = graph.consistency_checks;
   return (
     <div className="consistency-panel">
       <div className="consistency-grid">
-        <MetricTile label="Sample agreement" value={formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability)} />
-        <MetricTile label="Meaning groups" value={String(graph.disagreement.semantic_clusters.length)} />
-        <MetricTile label="Robustness changes" value={`${changed}/${probe.results.length || probe.operations.length || 0}`} />
-        <MetricTile label="Unsupported flips" value={String(unsupportedFlips)} />
+        <MetricTile label="Sample agreement" value={formatPercent(checks?.sample_agreement ?? graph.features.semantic_stability ?? graph.disagreement.semantic_stability)} />
+        <MetricTile label="Meaning groups" value={String((checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).length)} />
+        <MetricTile label="Sample overlap" value={formatPercent(checks?.sample_overlap_stability ?? graph.features.sample_overlap_stability)} />
+        <MetricTile label="Conflict rate" value={formatPercent(checks?.sample_conflict_rate ?? graph.features.sample_conflict_rate)} />
       </div>
       {graph.disagreement.accepted_rejected_dissent && <p className="panel-note">{graph.disagreement.accepted_rejected_dissent}</p>}
       <details className="nested-detail">
         <summary>Sample meanings</summary>
-        {graph.disagreement.semantic_clusters.length === 0 ? (
+        {(checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).length === 0 ? (
           <p className="empty-state">No candidate sample clusters were recorded.</p>
         ) : (
           <div className="compact-stack">
-            {graph.disagreement.semantic_clusters.map((cluster) => (
+            {(checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).map((cluster) => (
               <article key={cluster.cluster_id}>
                 <strong>{cluster.label || cluster.cluster_id}</strong>
                 <span>{cluster.candidate_ids.length} sample{cluster.candidate_ids.length === 1 ? "" : "s"}</span>
@@ -257,26 +219,39 @@ function ConsistencyTab({ graph }: { graph: ReliabilityGraph }) {
           </div>
         )}
       </details>
-      <details className="nested-detail">
-        <summary>Robustness checks</summary>
-        <p>{probe.reason}</p>
-        {probe.results.length === 0 ? (
-          <p className="empty-state">No robustness runs were recorded.</p>
-        ) : (
-          <div className="compact-stack">
-            {probe.results.map((result) => (
-              <article key={result.operation}>
-                <strong>{formatStatus(result.operation)}</strong>
-                <span>
-                  {result.answer_changed ? "changed" : "stable"} · similarity {formatNumber(result.similarity_to_baseline)} · unsupported flip{" "}
-                  {result.unsupported_flip ? "yes" : "no"}
-                </span>
-                <p>{result.result}</p>
-              </article>
-            ))}
-          </div>
-        )}
-      </details>
+    </div>
+  );
+}
+
+function RobustnessTab({ graph }: { graph: ReliabilityGraph }) {
+  const probe = graph.perturbation_probe ?? graph.causal_probe;
+  const changed = probe.results.filter((result) => result.answer_changed).length;
+  const unsupportedFlips = probe.results.filter((result) => result.unsupported_flip).length;
+  return (
+    <div className="consistency-panel">
+      <div className="consistency-grid">
+        <MetricTile label="Checks run" value={String(probe.results.length || probe.operations.length || 0)} />
+        <MetricTile label="Answer changed" value={String(changed)} />
+        <MetricTile label="Unsupported flips" value={String(unsupportedFlips)} />
+        <MetricTile label="Mode" value={formatStatus(probe.mode || "not available")} />
+      </div>
+      <p className="panel-note">{probe.reason || "Robustness checks compare observable provider outputs under pressure-style prompt variants."}</p>
+      {probe.results.length === 0 ? (
+        <p className="empty-state">No robustness runs were recorded.</p>
+      ) : (
+        <div className="compact-stack">
+          {probe.results.map((result) => (
+            <article key={result.operation}>
+              <strong>{formatStatus(result.operation)}</strong>
+              <span>
+                {result.answer_changed ? "changed" : "stable"} · similarity {formatNumber(result.similarity_to_baseline)} · unsupported flip{" "}
+                {result.unsupported_flip ? "yes" : "no"}
+              </span>
+              <p>{result.result}</p>
+            </article>
+          ))}
+        </div>
+      )}
       {graph.stress_tests.length > 0 && (
         <details className="nested-detail">
           <summary>Other checks</summary>
@@ -297,13 +272,13 @@ function ConsistencyTab({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
-function MethodsTab({ graph }: { graph: ReliabilityGraph }) {
+function ScoreTab({ graph }: { graph: ReliabilityGraph }) {
   return (
     <div className="methods-panel">
       <section className="method-section">
         <h3>Score</h3>
         <p>{calibrationCopy(graph)}</p>
-        <p className="panel-note">The score ranks risk across answers. It is not a probability or guarantee.</p>
+        <p className="panel-note">The Reliability Score estimates answer trustability under the gathered evidence. It is not proof, a guarantee, or a provider confidence score.</p>
         {graph.score_caps.length > 0 && (
           <div className="issue-list">
             {graph.score_caps.map((cap) => (
@@ -335,14 +310,6 @@ function MethodsTab({ graph }: { graph: ReliabilityGraph }) {
           </div>
         </details>
       )}
-      <details className="nested-detail">
-        <summary>Observable activity</summary>
-        <ActivityTab graph={graph} />
-      </details>
-      <details className="nested-detail">
-        <summary>Export</summary>
-        <ExportTab graph={graph} />
-      </details>
     </div>
   );
 }
@@ -374,6 +341,15 @@ function ActivityTab({ graph }: { graph: ReliabilityGraph }) {
 function traceOutput(span: TraceSpan): string {
   try {
     const parsed = JSON.parse(span.output_summary);
+    if (Array.isArray(parsed.substeps)) {
+      const names = parsed.substeps
+        .map((step: { step?: string }) => String(step.step || "").replaceAll("_", " "))
+        .filter(Boolean);
+      if (span.type === "answer_generation") return `Answer generated${names.length ? ` after ${names.join(", ")}` : ""}.`;
+      if (span.type === "evidence_build") return `Evidence packet built${names.length ? ` through ${names.join(", ")}` : ""}.`;
+      if (span.type === "claim_audit") return `Claims audited${names.length ? ` through ${names.join(", ")}` : ""}.`;
+      if (span.type === "score_and_report") return "Final score and reliability report prepared.";
+    }
     if (span.type === "research_router") {
       const route = parsed.route?.route ? String(parsed.route.route).replaceAll("_", " ") : "no search";
       return `Retrieval plan: ${route}. ${parsed.route?.reason ?? ""}`.trim();
@@ -385,7 +361,7 @@ function traceOutput(span: TraceSpan): string {
     }
     if (span.type === "reliability_scoring") {
       const caps = Array.isArray(parsed.caps) && parsed.caps.length ? ` Caps: ${parsed.caps.join("; ")}` : "";
-      return `Reliability score ${parsed.score ?? "n/a"}/100.${caps}`;
+      return `Reliability Score ${parsed.score ?? "n/a"}/100.${caps}`;
     }
     return Object.entries(parsed)
       .slice(0, 3)
@@ -398,58 +374,28 @@ function traceOutput(span: TraceSpan): string {
 
 export function ReliabilityCards({ graph }: { graph: ReliabilityGraph }) {
   const meta = answerMeta(graph);
-  const [helpOpen, setHelpOpen] = useState(false);
   if (!meta.complete) {
     return (
-      <section className="reliability-strip-v2 verdict-do_not_rely" aria-label="Reliability summary">
-        <div className="reliability-mainline">
-          <div className="decision-cell">
-            <span className="decision-pill decision-do_not_rely">Incomplete</span>
-            <strong>Reliability analysis incomplete</strong>
-            <small>Required fields were missing.</small>
-          </div>
-          <div className="reliability-read">
-            <span>Can I rely on this?</span>
-            <p>{meta.incompleteReason}</p>
-          </div>
-          <div className="next-cell">
-            <span>Next</span>
-            <p>{meta.nextAction}</p>
-          </div>
+      <section className="reliability-score-panel verdict-do_not_rely" aria-label="Reliability summary">
+        <div>
+          <span className="decision-pill decision-do_not_rely">Incomplete</span>
+          <strong>Reliability analysis incomplete</strong>
+          <p>{meta.incompleteReason}</p>
         </div>
       </section>
     );
   }
-  const metrics = reliabilityMetrics(graph);
   return (
-    <section className={`reliability-strip-v2 verdict-${meta.verdict}`} aria-label="Reliability summary">
-      <div className="reliability-mainline">
-        <div className="decision-cell">
-          <span className={`decision-pill decision-${meta.verdict}`}>{meta.verdictLabel}</span>
-          <strong>{meta.score}/100</strong>
-          <small>{scoreStatus(graph)}</small>
-        </div>
-        <div className="reliability-read">
-          <span>Can I rely on this?</span>
-          <p>{reliabilityOneLine(graph)}</p>
-        </div>
-        <div className="next-cell">
-          <span>Next</span>
-          <p>{cleanNextAction(meta.nextAction ?? "", graph)}</p>
-        </div>
+    <section className={`reliability-score-panel verdict-${meta.verdict}`} aria-label="Reliability summary">
+      <div className="score-panel-main">
+        <span className={`decision-pill decision-${meta.verdict}`}>{meta.verdictLabel}</span>
+        <strong>Reliability Score {meta.score}/100</strong>
+        <small>{scoreStatus(graph)}</small>
       </div>
-      <div className="reliability-metrics" aria-label="Reliability metrics">
-        {metrics.map((metric) => (
-          <span className="metric-chip" key={metric.label}>
-            <b>{metric.value}</b>
-            {metric.label}
-          </span>
-        ))}
-        <button className="method-link" type="button" onClick={() => setHelpOpen((open) => !open)}>
-          {helpOpen ? "Hide method" : "How this was checked"}
-        </button>
+      <div className="score-panel-copy">
+        <p>{graph.answer.reliability_explanation || graph.analysis_explanation || reliabilityOneLine(graph)}</p>
+        <small>Next: {cleanNextAction(meta.nextAction ?? "", graph)}</small>
       </div>
-      {helpOpen && <ReliabilityHelpDrawer graph={graph} />}
     </section>
   );
 }
@@ -476,23 +422,25 @@ export function AnswerCitations({ graph }: { graph: ReliabilityGraph }) {
 }
 
 export function ReliabilityDetails({ graph }: { graph: ReliabilityGraph }) {
-  const sections: Array<{ title: ReportTab; defaultOpen?: boolean }> = [
-    { title: "Issues", defaultOpen: answerMeta(graph).verdict === "do_not_rely" },
-    { title: "Evidence" },
-    { title: "Consistency" },
-    { title: "Methods" },
-  ];
+  const [activeTab, setActiveTab] = useState<ReportTab>("Overview");
+  const meta = answerMeta(graph);
   return (
-    <div className="answer-details">
-      {sections.map((section) => (
-        <details data-reliability-section key={section.title} onToggle={handleDetailToggle} open={section.defaultOpen}>
-          <summary>
-            <span>{section.title}</span>
-          </summary>
-          <div className="detail-panel">{renderTab(section.title, graph)}</div>
-        </details>
-      ))}
-    </div>
+    <details className="analysis-drawer" data-reliability-section onToggle={handleDetailToggle} open={meta.verdict === "do_not_rely"}>
+      <summary>
+        <span>Full reliability analysis</span>
+        <small>Evidence, claims, consistency, score, and export</small>
+      </summary>
+      <div className="analysis-drawer-body">
+        <nav className="analysis-tab-row" aria-label="Reliability analysis sections">
+          {TABS.map((tab) => (
+            <button className={activeTab === tab ? "selected" : ""} key={tab} type="button" onClick={() => setActiveTab(tab)}>
+              {tab}
+            </button>
+          ))}
+        </nav>
+        <div className="detail-panel">{renderTab(activeTab, graph)}</div>
+      </div>
+    </details>
   );
 }
 
@@ -506,59 +454,6 @@ function handleDetailToggle(event: SyntheticEvent<HTMLDetailsElement>) {
   window.requestAnimationFrame(() => {
     details.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
-}
-
-function ReliabilityHelpDrawer({ graph }: { graph: ReliabilityGraph }) {
-  const rows = [
-    {
-      title: "Final decision",
-      meaning: "The product's practical call for this answer: rely, use with caution, or do not rely.",
-      interpret: "Start here. If the decision is caution or do not rely, read Issues before acting.",
-      limit: "It is a decision aid, not proof that the answer is true.",
-    },
-    {
-      title: "Evidence checks",
-      meaning: "Answer claims are compared with retrieved web, URL, or file snippets.",
-      interpret: "Supported claims raise trust; contradictions and missing evidence lower trust.",
-      limit: "Search can miss better sources, and weak sources can still be wrong.",
-    },
-    {
-      title: "Sample agreement",
-      meaning: "The app asks for multiple candidate answers and checks whether they converge on the same meaning.",
-      interpret: `Current agreement: ${formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability)}.`,
-      limit: "Model self-agreement is useful risk evidence, not independent verification.",
-    },
-    {
-      title: "Score",
-      meaning: "A benchmark-tuned 0-100 risk-ranking signal.",
-      interpret: graph.score_caps.length > 0 ? `The score was capped by ${graph.score_caps.length} risk rule${graph.score_caps.length === 1 ? "" : "s"}.` : "Use it to compare relative risk, not as a truth percentage.",
-      limit: "It is not a probability, confidence score, or guarantee.",
-    },
-  ];
-  return (
-    <div className="help-drawer">
-      <div className="help-drawer-header">
-        <h3>How this was checked</h3>
-        <p>Plain-language guide to the reliability summary above.</p>
-      </div>
-      <div className="help-grid">
-        {rows.map((row) => (
-          <article key={row.title}>
-            <h4>{row.title}</h4>
-            <p>
-              <strong>Means:</strong> {row.meaning}
-            </p>
-            <p>
-              <strong>Read it as:</strong> {row.interpret}
-            </p>
-            <p>
-              <strong>Limit:</strong> {row.limit}
-            </p>
-          </article>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function ExportTab({ graph }: { graph: ReliabilityGraph }) {
@@ -656,25 +551,11 @@ function uniqueLines(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
-function reliabilityMetrics(graph: ReliabilityGraph): Array<{ label: string; value: string }> {
-  const groupedSources = groupedEvidence(graph);
-  const support = supportBreakdown(graph);
-  const metrics = [
-    { label: "sources", value: String(groupedSources.length) },
-    { label: "claims checked", value: String(support.total) },
-    { label: "direct support", value: `${support.direct}/${support.total || 0}` },
-  ];
-  if (support.partial > 0) metrics.push({ label: "partial claims", value: String(support.partial) });
-  if (support.unsupported > 0) metrics.push({ label: "not found", value: String(support.unsupported) });
-  metrics.push({ label: "sample agreement", value: formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability) });
-  return metrics;
-}
-
 function scoreStatus(graph: ReliabilityGraph): string {
   if (graph.score_caps.length > 0) return "Capped by risk signals";
-  if (graph.answer.calibration_status === "benchmark_tuned_diagnostic") return "Benchmark-tuned risk signal";
-  if (graph.answer.calibration_status === "local_calibration") return "Locally calibrated risk signal";
-  return "Risk-ranking signal";
+  if (graph.answer.calibration_status === "benchmark_tuned" || graph.answer.calibration_status === "benchmark_tuned_diagnostic") return "Benchmark-tuned estimate";
+  if (graph.answer.calibration_status === "local_calibration") return "Locally calibrated estimate";
+  return "Research-prior estimate";
 }
 
 function reliabilityOneLine(graph: ReliabilityGraph): string {
@@ -727,17 +608,6 @@ function claimRelation(assessment: ClaimAssessment | undefined, checkability?: s
   return assessment?.relation ?? assessment?.status ?? "unassessed";
 }
 
-function claimRiskRank(assessment: ClaimAssessment | undefined, checkability?: string): number {
-  const relation = claimRelation(assessment, checkability);
-  if (relation === "contradicted") return 0;
-  if (relation === "not_found" || relation === "insufficient_evidence") return 1;
-  if (relation === "partially_supported") return 2;
-  if (relation === "unassessed") return 3;
-  if (relation === "not_checkable") return 4;
-  if (relation === "supported") return 5;
-  return 3;
-}
-
 function relationClass(relation: string): string {
   if (relation === "partially_supports") return "partially_supported";
   if (relation === "supports") return "supported";
@@ -758,12 +628,6 @@ function RelationPill({ relation }: { relation: string }) {
   return <span className={`relation-pill relation-${relationClass(relation)}`}>{relationLabel(relation)}</span>;
 }
 
-function methodLabel(assessment: ClaimAssessment | undefined, relation: string): string {
-  if (relation === "not_checkable") return "not scored";
-  if (assessment?.assessment_method === "provider_entailment_verifier") return "model + entailment";
-  return assessment?.assessment_method ? formatStatus(assessment.assessment_method) : "unassessed";
-}
-
 function relationExplanation(relation: string): string {
   if (relation === "supported" || relation === "supports") return "A source snippet supports this claim.";
   if (relation === "partially_supported" || relation === "partially_supports") return "A source snippet supports part of this claim, but not the full wording.";
@@ -772,32 +636,15 @@ function relationExplanation(relation: string): string {
   return "No source snippet was found that supports this claim.";
 }
 
-function evidenceLimitText(relation: string, matchCount: number): string {
-  if (relation === "not_checkable") return "No source match is required for this non-scored item.";
-  if (matchCount > 0) return `${matchCount} matched evidence item${matchCount === 1 ? "" : "s"} found.`;
-  return "No matched source snippet was available for this claim.";
-}
-
 function calibrationCopy(graph: ReliabilityGraph): string {
   if (graph.answer.calibration_status === "local_calibration") {
     const labels = graph.calibration.benchmark?.label_count ?? 0;
     return labels > 0 ? `Locally calibrated with ${labels} labeled run${labels === 1 ? "" : "s"}` : "Locally calibrated";
   }
-  if (graph.answer.calibration_status === "benchmark_tuned_diagnostic") {
-    return "Benchmark-tuned diagnostic; use the decision and evidence, not the number alone";
+  if (graph.answer.calibration_status === "benchmark_tuned" || graph.answer.calibration_status === "benchmark_tuned_diagnostic") {
+    return "Benchmark-tuned Reliability Score; use the evidence and final decision with the number";
   }
-  return "Research-prior diagnostic; use the decision and evidence, not the number alone";
-}
-
-function scoreBasis(graph: ReliabilityGraph): string {
-  const contradicted = graph.claim_assessments.filter((item) => item.relation === "contradicted" || item.status === "contradicted").length;
-  if (contradicted > 0) return `Lowered by ${contradicted} contradicted checked claim${contradicted === 1 ? "" : "s"}.`;
-  if (graph.score_caps.length > 0) return `Capped: ${graph.score_caps[0]}.`;
-  const features = graph.features;
-  if (features.evidence_required >= 0.5) {
-    return `Driven by claim support ${formatPercent(features.claim_support_rate)}, source match ${formatPercent(features.retrieval_alignment_score)}, and sample agreement ${formatPercent(features.semantic_stability)}.`;
-  }
-  return `Driven mostly by sample agreement ${formatPercent(features.semantic_stability)} and overlap ${formatPercent(features.sample_overlap_stability)} because no source was required.`;
+  return "Research-prior Reliability Score; use the evidence and final decision with the number";
 }
 
 function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
@@ -814,6 +661,74 @@ function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
   return featureLabels
     .filter(([key]) => graph.features[key] !== undefined)
     .map(([key, label, meaning]) => [label, formatPercent(graph.features[key]), meaning]);
+}
+
+type ClaimAuditRow = NonNullable<ReliabilityGraph["claim_audit"]>[number];
+type EvidenceSourceRow = NonNullable<ReliabilityGraph["evidence_sources"]>[number];
+
+function claimAuditRows(graph: ReliabilityGraph): ClaimAuditRow[] {
+  if (graph.claim_audit && graph.claim_audit.length > 0) return graph.claim_audit;
+  const assessmentByClaim = new Map(graph.claim_assessments.map((assessment) => [assessment.claim_id, assessment]));
+  return graph.claims.map((claim) => {
+    const assessment = assessmentByClaim.get(claim.claim_id);
+    const relation = claimRelation(assessment, claim.checkability) as ClaimAuditRow["relation"];
+    return {
+      claim_id: claim.claim_id,
+      claim: claim.text,
+      answer_quote: claim.answer_quote,
+      claim_type: claim.type,
+      checkability: claim.checkability,
+      importance: claim.importance,
+      relation,
+      severity: relation === "contradicted" || relation === "not_found" ? "high" : relation === "partially_supported" ? "medium" : "low",
+      evidence_ids: assessment?.evidence_ids ?? [],
+      why: assessment?.why ?? assessment?.explanation ?? relationExplanation(relation),
+      limitation: assessment?.source_limit ?? "",
+      provider_relation: assessment?.provider_relation ?? undefined,
+      assessment_method: assessment?.assessment_method,
+      verifier: assessment?.verifier,
+      entailment_score: assessment?.entailment_score,
+      contradiction_score: assessment?.contradiction_score,
+      neutral_score: assessment?.neutral_score,
+      support_score: assessment?.support_score,
+      risk_flags: claim.risk_flags ?? [],
+    };
+  });
+}
+
+function evidenceSourceRows(graph: ReliabilityGraph): EvidenceSourceRow[] {
+  if (graph.evidence_sources && graph.evidence_sources.length > 0) return graph.evidence_sources;
+  return groupedEvidence(graph).map((group, index) => ({
+    source_id: `src_${index + 1}`,
+    title: group.title,
+    url: group.url,
+    source_type: group.type,
+    quality: group.quality,
+    freshness: group.date || "not_dated",
+    match_count: group.matches,
+    claim_ids: [],
+    evidence_ids: [],
+    relations: { [group.relation]: group.matches },
+    top_snippet: group.snippets[0] || "",
+    top_relevance: group.bestScore,
+  }));
+}
+
+function relationSummary(relations: Record<string, number>): string {
+  const entries = Object.entries(relations || {}).filter(([, count]) => count > 0);
+  if (entries.length === 0) return "matched evidence";
+  return entries
+    .slice(0, 3)
+    .map(([relation, count]) => `${count} ${relationLabel(relation)}`)
+    .join(" · ");
+}
+
+function claimAuditRiskRank(relation: string, severity: string | undefined): number {
+  if (relation === "contradicted") return 0;
+  if (relation === "not_found" || relation === "insufficient_evidence") return severity === "high" ? 1 : 2;
+  if (relation === "partially_supported") return 3;
+  if (relation === "not_checkable") return 5;
+  return 4;
 }
 
 function externalEvidence(graph: ReliabilityGraph): EvidenceItem[] {

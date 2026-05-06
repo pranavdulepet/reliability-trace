@@ -105,7 +105,7 @@ async def main() -> None:
         try:
             await run_pipeline(base_run("What is ReliabilityGraph?"), [])
         except PipelineStageError as exc:
-            assert exc.stage == "candidate_generation"
+            assert exc.stage == "answer_generation"
             print("## provider malformed output")
             print(f"- failed cleanly: {exc.stage}: {exc.message}")
             print()

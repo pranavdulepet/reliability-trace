@@ -2,13 +2,14 @@ import asyncio
 import json
 import math
 import re
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ..providers import build_provider
 from ..providers.base import GenerateRequest, ModelMessage, ProviderError
 from ..retrieval import compact_snippet, evidence_for_claims, search_chunks, text_similarity, tokenize
 from ..verifier import EntailmentResult, EntailmentVerifier, VerifierUnavailable
-from .scoring import SCORE_WEIGHT_METADATA, compute_reliability_score
+from .scoring import EVIDENCE_OPTIONAL_WEIGHTS, EVIDENCE_REQUIRED_WEIGHTS, SCORE_WEIGHT_METADATA, compute_reliability_score
 
 ProviderKeyResolver = Callable[[str], Awaitable[Optional[str]]]
 SECRET_PATTERNS = [
@@ -18,6 +19,8 @@ SECRET_PATTERNS = [
     re.compile(r"sk-[A-Za-z0-9_-]{12,}"),
     re.compile(r"AIza[A-Za-z0-9_-]{20,}"),
 ]
+GRAPH_VERSION = "v2"
+SCORE_MODEL_VERSION = "rg-score-v2.0"
 
 
 class PipelineStageError(RuntimeError):
@@ -42,21 +45,35 @@ class ReliabilityPipeline:
     SAMPLE_CLUSTER_THRESHOLD = 0.22
 
     steps = [
-        ("question_classifier", "Classifying question type"),
-        ("candidate_generation", "Generating candidate answers"),
-        ("semantic_clustering", "Clustering answer meanings"),
-        ("synthesis", "Selecting final answer and preserving dissent signals"),
-        ("claim_extraction", "Extracting atomic claims"),
-        ("assumption_extraction", "Extracting assumptions"),
-        ("evidence_retrieval", "Retrieving evidence"),
-        ("claim_check", "Checking claim support"),
-        ("decision_analysis", "Running decision analysis"),
-        ("static_checks", "Running static risk checks"),
-        ("signal_summary", "Summarizing reliability signals"),
-        ("reliability_scoring", "Computing diagnostic reliability score"),
-        ("calibration_lookup", "Checking calibration status"),
-        ("perturbation_probe", "Running perturbation checks"),
+        ("answer_generation", "Generating answer"),
+        ("evidence_build", "Building evidence packet"),
+        ("claim_audit", "Auditing claims against evidence"),
+        ("score_and_report", "Computing reliability score and report"),
     ]
+    stage_steps = {
+        "answer_generation": [
+            "question_classifier",
+            "candidate_generation",
+            "semantic_clustering",
+            "synthesis",
+        ],
+        "evidence_build": [
+            "claim_extraction",
+            "assumption_extraction",
+            "evidence_retrieval",
+        ],
+        "claim_audit": [
+            "claim_check",
+            "decision_analysis",
+            "static_checks",
+            "signal_summary",
+        ],
+        "score_and_report": [
+            "reliability_scoring",
+            "calibration_lookup",
+            "perturbation_probe",
+        ],
+    }
 
     def __init__(
         self,
@@ -77,28 +94,33 @@ class ReliabilityPipeline:
         self.trace = []
         state: Dict[str, Any] = {"run": run}
         total = len(self.steps)
-        for index, (step_type, message) in enumerate(self.steps, start=1):
-            span = self._span(run["run_id"], step_type, "running", message)
-            yield self._event("progress", span, index - 1, total)
+        for index, (stage_type, message) in enumerate(self.steps, start=1):
+            event_type = "progress" if stage_type == "answer_generation" else "audit_progress"
+            span = self._span(run["run_id"], stage_type, "running", message)
+            yield self._event(event_type, span, index - 1, total)
             await asyncio.sleep(0.02)
-            if step_type == "candidate_generation":
-                output = None
-                async for event in self._stream_candidate_generation(state, resolve_key):
-                    if event["type"] == "candidate_generation_completed":
-                        output = event["output"]
-                    else:
-                        yield event
-                if output is None:
-                    raise PipelineStageError(
-                        "candidate_generation_failed",
-                        "candidate_generation",
-                        "Candidate generation did not produce a completed result.",
-                    )
-            else:
-                output = await self._execute_step(step_type, state, resolve_key)
-            completed = self._span(run["run_id"], step_type, "completed", message, output)
+            output: Dict[str, Any] = {"substeps": []}
+            for internal_step in self.stage_steps[stage_type]:
+                if internal_step == "candidate_generation":
+                    candidate_output = None
+                    async for event in self._stream_candidate_generation(state, resolve_key):
+                        if event["type"] == "candidate_generation_completed":
+                            candidate_output = event["output"]
+                        else:
+                            yield event
+                    if candidate_output is None:
+                        raise PipelineStageError(
+                            "answer_generation_failed",
+                            "answer_generation",
+                            "Answer generation did not produce a completed result.",
+                        )
+                    internal_output = candidate_output
+                else:
+                    internal_output = await self._execute_step(internal_step, state, resolve_key)
+                output["substeps"].append(self._public_substep(internal_step, internal_output))
+            completed = self._span(run["run_id"], stage_type, "completed", message, output)
             self.trace.append(completed)
-            yield self._event("progress", completed, index, total)
+            yield self._event(event_type, completed, index, total)
 
         graph = self._build_graph(state)
         yield {
@@ -108,6 +130,45 @@ class ReliabilityPipeline:
             "graph": graph,
             "trace": self.trace,
         }
+
+    def _public_substep(self, step_type: str, output: Dict[str, Any]) -> Dict[str, Any]:
+        public = {"step": step_type, "completed": True}
+        if step_type == "question_classifier":
+            public["question_type"] = output.get("question_type")
+        elif step_type == "candidate_generation":
+            public["candidate_count"] = output.get("candidate_count")
+            public["provider_error"] = self._redact_sensitive_text(str(output.get("provider_error") or "")) or None
+        elif step_type == "semantic_clustering":
+            public["cluster_count"] = output.get("cluster_count")
+            public["semantic_stability"] = output.get("semantic_stability")
+        elif step_type == "synthesis":
+            public["answer_ready"] = True
+        elif step_type == "claim_extraction":
+            public["claim_count"] = output.get("claim_count")
+            public["structured"] = output.get("structured")
+        elif step_type == "assumption_extraction":
+            public["assumption_count"] = output.get("assumption_count")
+            public["structured"] = output.get("structured")
+        elif step_type == "evidence_retrieval":
+            public["evidence_count"] = output.get("evidence_count")
+            public["source_chunk_count"] = output.get("source_chunk_count")
+        elif step_type == "claim_check":
+            public["assessed_claims"] = output.get("assessed_claims")
+            public["structured_evidence"] = output.get("structured_evidence")
+        elif step_type == "decision_analysis":
+            public["alternative_count"] = output.get("alternative_count")
+            public["structured"] = output.get("structured")
+        elif step_type == "static_checks":
+            public["static_risk_rate"] = output.get("static_risk_rate")
+        elif step_type == "signal_summary":
+            public["signals_ready"] = True
+        elif step_type == "reliability_scoring":
+            public["score_ready"] = False
+        elif step_type == "calibration_lookup":
+            public["calibration_status"] = output.get("calibration_status")
+        elif step_type == "perturbation_probe":
+            public["mode"] = output.get("mode")
+        return public
 
     async def _execute_step(
         self,
@@ -250,7 +311,7 @@ class ReliabilityPipeline:
         if run["provider"] in ["preview", "local"] or not run.get("use_live_provider"):
             raise PipelineStageError(
                 "provider_required",
-                "candidate_generation",
+                "answer_generation",
                 "A connected LLM provider is required for chat runs.",
                 retryable=False,
             )
@@ -258,7 +319,7 @@ class ReliabilityPipeline:
         if not api_key:
             raise PipelineStageError(
                 "provider_key_missing",
-                "candidate_generation",
+                "answer_generation",
                 "No active provider key was available for the selected provider.",
                 retryable=False,
             )
@@ -341,7 +402,7 @@ class ReliabilityPipeline:
                 if not answer_text:
                     raise PipelineStageError(
                         "provider_bad_answer",
-                        "candidate_generation",
+                        "answer_generation",
                         "The selected provider returned an empty, echoed, or malformed answer after retry.",
                     )
                 candidates.append(
@@ -368,7 +429,7 @@ class ReliabilityPipeline:
         except ProviderError as exc:
             raise PipelineStageError(
                 "provider_error",
-                "candidate_generation",
+                "answer_generation",
                 self._safe_error_text(str(exc)),
             ) from exc
 
@@ -508,7 +569,7 @@ class ReliabilityPipeline:
             "unresolved_disagreements": ["Whether the high-impact claims hold under retrieved source evidence."],
             "main_uncertainty": "The answer depends on the claims marked insufficient, contradicted, or only partially supported.",
             "what_would_change_the_answer": "Better source evidence, contradicted critical claims, or a perturbation run that flips the answer without new evidence.",
-            "recommended_user_action": "Review the reliability cards, add relevant attachments if evidence is thin, then rerun or ask a follow-up.",
+            "recommended_user_action": "Open the reliability analysis, add relevant attachments if evidence is thin, then rerun or ask a follow-up.",
         }
 
     async def _extract_claims(
@@ -1711,19 +1772,19 @@ class ReliabilityPipeline:
         if self.calibration_report.get("label_count", 0) <= 0:
             if SCORE_WEIGHT_METADATA.get("source") == "benchmark_tuned":
                 return {
-                    "status": "benchmark_tuned_diagnostic",
-                    "display": "Benchmark-tuned diagnostic",
+                    "status": "benchmark_tuned",
+                    "display": "Benchmark-tuned Reliability Score",
                     "note": (
-                        "Linear score weights were fitted on official-style benchmark evals. "
-                        "This improves ranking, but the score is still not a probability of truth."
+                        "Score weights were fitted on official-style reliability benchmarks to improve trust ranking. "
+                        "The score estimates answer reliability under the gathered evidence; it is not a guarantee."
                     ),
                     "benchmark": self.calibration_report,
                     "score_weights": SCORE_WEIGHT_METADATA,
                 }
             return {
-                "status": "uncalibrated_diagnostic",
-                "display": "Research-prior diagnostic",
-                "note": "Using built-in research-prior weights. Add labels or benchmark-tuned weights before making calibration claims.",
+                "status": "research_prior",
+                "display": "Research-prior Reliability Score",
+                "note": "Using built-in research-prior weights. Add labels or benchmark-tuned weights before making stronger calibration claims.",
                 "benchmark": self.calibration_report,
                 "score_weights": SCORE_WEIGHT_METADATA,
             }
@@ -2400,12 +2461,25 @@ class ReliabilityPipeline:
             negative.append("Provider output had a recoverable error: %s" % provider_error)
         negative.extend(state["score_caps"])
         if not negative:
-            negative.append("Remaining risk is calibration: the score is diagnostic, not a probability")
+            negative.append("Remaining risk is calibration and source coverage; the score is not a guarantee.")
+
+        reliability_explanation = self._reliability_explanation(
+            verdict,
+            score,
+            evidence_status,
+            main_uncertainty,
+            next_action,
+            len(supported),
+            len(partially_supported),
+            len(contradicted),
+            len(checkable_assessments),
+        )
 
         return {
             "answer": {
                 "verdict": verdict,
                 "verdict_reason": verdict_reason,
+                "reliability_explanation": reliability_explanation,
                 "next_best_action": next_action,
                 "evidence_status": evidence_status,
                 "source_limitations": source_limitations,
@@ -2417,6 +2491,42 @@ class ReliabilityPipeline:
             "top_negative_signals": negative[:5],
             "analysis_basis": self._analysis_basis(state),
         }
+
+    def _reliability_explanation(
+        self,
+        verdict: str,
+        score: int,
+        evidence_status: str,
+        main_uncertainty: str,
+        next_action: str,
+        supported_count: int,
+        partial_count: int,
+        contradicted_count: int,
+        checked_count: int,
+    ) -> str:
+        if verdict == "rely":
+            lead = "The answer is usable because the checked claims are supported by the gathered evidence and consistency checks did not find a blocking issue."
+        elif verdict == "do_not_rely":
+            lead = "Do not rely on this answer as-is because the audit found a contradiction, missing source support, or unstable behavior."
+        else:
+            lead = "Use this answer with caution: it is useful, but the audit found limits that matter before acting on it."
+        evidence_line = (
+            "%d of %d checked claims were directly supported"
+            % (supported_count, checked_count)
+            if checked_count
+            else "No checkable factual claims were scored"
+        )
+        if partial_count:
+            evidence_line += ", with %d partial" % partial_count
+        if contradicted_count:
+            evidence_line += ", and %d contradicted" % contradicted_count
+        return " ".join(
+            [
+                lead,
+                "%s. Reliability Score: %d/100. Main uncertainty: %s Next step: %s"
+                % (evidence_line, score, main_uncertainty, next_action),
+            ]
+        )
 
     def _main_uncertainty(
         self,
@@ -2673,12 +2783,160 @@ class ReliabilityPipeline:
             if cap not in state["score_caps"]:
                 state["score_caps"].append(cap)
 
+    def _claim_audit_rows(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        claims_by_id = {claim["claim_id"]: claim for claim in state.get("claims", [])}
+        rows: List[Dict[str, Any]] = []
+        for assessment in state.get("claim_assessments", []):
+            claim = claims_by_id.get(assessment.get("claim_id"), {})
+            relation = assessment.get("relation") or assessment.get("status")
+            if assessment.get("status") == "not_checkable":
+                relation = "not_checkable"
+            rows.append(
+                {
+                    "claim_id": assessment.get("claim_id"),
+                    "claim": claim.get("text", ""),
+                    "answer_quote": claim.get("answer_quote") or claim.get("source_sentence") or "",
+                    "claim_type": claim.get("type") or "factual",
+                    "checkability": claim.get("checkability") or "checkable",
+                    "importance": claim.get("importance") or "medium",
+                    "relation": relation,
+                    "severity": self._claim_severity(claim, assessment, relation),
+                    "evidence_ids": list(assessment.get("evidence_ids") or []),
+                    "why": assessment.get("why") or assessment.get("explanation") or "",
+                    "limitation": assessment.get("source_limit") or "",
+                    "provider_relation": assessment.get("provider_relation"),
+                    "assessment_method": assessment.get("assessment_method") or assessment.get("method"),
+                    "verifier": assessment.get("verifier"),
+                    "entailment_score": assessment.get("entailment_score"),
+                    "contradiction_score": assessment.get("contradiction_score"),
+                    "neutral_score": assessment.get("neutral_score"),
+                    "support_score": assessment.get("support_score"),
+                    "risk_flags": claim.get("risk_flags", []),
+                }
+            )
+        return rows
+
+    def _claim_severity(self, claim: Dict[str, Any], assessment: Dict[str, Any], relation: Optional[str]) -> str:
+        if relation == "contradicted":
+            return "high" if claim.get("importance") == "high" else "medium"
+        if relation in {"not_found", "insufficient_evidence"}:
+            return "high" if claim.get("importance") == "high" else "medium"
+        if relation == "partially_supported":
+            return "medium"
+        if assessment.get("status") == "not_checkable":
+            return "none"
+        return "low"
+
+    def _evidence_source_rows(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for item in state.get("evidence", []):
+            if item.get("source_type") in {"system_trace", "internal_policy"}:
+                continue
+            key = item.get("source_url") or item.get("source_title") or item.get("evidence_id")
+            row = grouped.setdefault(
+                key,
+                {
+                    "source_id": "src_%d" % (len(grouped) + 1),
+                    "title": item.get("source_title") or "Untitled source",
+                    "url": item.get("source_url"),
+                    "source_type": item.get("source_type") or "uploaded_document",
+                    "quality": item.get("source_quality") or "low",
+                    "freshness": self._source_freshness(item),
+                    "match_count": 0,
+                    "claim_ids": [],
+                    "evidence_ids": [],
+                    "relations": {},
+                    "top_snippet": "",
+                    "top_relevance": 0.0,
+                },
+            )
+            row["match_count"] += 1
+            row["claim_ids"].append(item.get("claim_id"))
+            row["evidence_ids"].append(item.get("evidence_id"))
+            relation = item.get("support_relation") or "matched"
+            row["relations"][relation] = row["relations"].get(relation, 0) + 1
+            relevance = float(item.get("relevance_score") or 0.0)
+            if relevance >= float(row.get("top_relevance") or 0.0):
+                row["top_relevance"] = relevance
+                row["top_snippet"] = item.get("snippet") or ""
+        rows = list(grouped.values())
+        rows.sort(key=lambda row: (self._quality_rank(row["quality"]), row["match_count"], row["top_relevance"]), reverse=True)
+        return rows
+
+    def _source_freshness(self, evidence: Dict[str, Any]) -> str:
+        date = evidence.get("source_date")
+        if not date:
+            return "not_dated"
+        return "dated"
+
+    def _quality_rank(self, quality: str) -> int:
+        return {"high": 3, "medium": 2, "low": 1}.get(quality, 0)
+
+    def _source_quality_rows(self, evidence_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        rows = []
+        for source in evidence_sources:
+            rows.append(
+                {
+                    "source_id": source["source_id"],
+                    "title": source["title"],
+                    "quality": source["quality"],
+                    "freshness": source["freshness"],
+                    "reason": self._source_quality_reason(source),
+                }
+            )
+        return rows
+
+    def _source_quality_reason(self, source: Dict[str, Any]) -> str:
+        if source.get("quality") == "high":
+            return "Primary or high-provenance source metadata."
+        if source.get("quality") == "medium":
+            return "Recognized web or uploaded source, but not treated as definitive."
+        return "Lower-provenance or weakly identified source; inspect before relying on it."
+
+    def _consistency_checks(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "sample_count": len(state.get("candidate_answers", [])),
+            "sample_agreement": round(float(state.get("semantic_stability", 0.0)), 4),
+            "semantic_entropy": round(float(state.get("semantic_entropy", 0.0)), 4),
+            "semantic_clusters": state.get("semantic_clusters", []),
+            "sample_overlap_stability": state.get("features", {}).get("sample_overlap_stability"),
+            "sample_conflict_rate": state.get("features", {}).get("sample_conflict_rate"),
+        }
+
+    def _robustness_checks(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        probe = state.get("perturbation_probe") or {}
+        return {
+            "available": bool(probe.get("available")),
+            "mode": probe.get("mode"),
+            "results": probe.get("results", []),
+            "unsupported_flip_count": len([result for result in probe.get("results", []) if result.get("unsupported_flip")]),
+        }
+
+    def _score_inputs(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "features": state.get("features", {}),
+            "caps": state.get("score_caps", []),
+            "weights": {
+                "evidence_required": EVIDENCE_REQUIRED_WEIGHTS,
+                "evidence_optional": EVIDENCE_OPTIONAL_WEIGHTS,
+                "metadata": SCORE_WEIGHT_METADATA,
+            },
+            "score_model_version": SCORE_MODEL_VERSION,
+        }
+
     def _build_graph(self, state: Dict[str, Any]) -> Dict[str, Any]:
         run = state["run"]
         self._apply_runtime_score_caps(state)
         reliability = self._reliability_summary(state)
         citations = self._citations(state)
+        claim_audit = self._claim_audit_rows(state)
+        evidence_sources = self._evidence_source_rows(state)
+        analysis_explanation = reliability["answer"]["reliability_explanation"]
         graph = {
+            "graph_version": GRAPH_VERSION,
+            "audit_status": "completed",
+            "audit_completed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "score_model_version": SCORE_MODEL_VERSION,
             "run": {
                 "run_id": run["run_id"],
                 "conversation_id": run.get("conversation_id"),
@@ -2701,13 +2959,18 @@ class ReliabilityPipeline:
                 "citation_annotations": self._citation_annotations(state, citations),
                 "final_decision": reliability["answer"]["verdict"],
                 "reliability_score": state["score"],
+                "score_ready": True,
                 "calibration_status": state["calibration"]["status"],
                 "top_positive_signals": reliability["top_positive_signals"],
                 "top_negative_signals": reliability["top_negative_signals"],
             },
+            "analysis_explanation": analysis_explanation,
             "claims": state["claims"],
             "evidence": state["evidence"],
             "claim_assessments": state["claim_assessments"],
+            "claim_audit": claim_audit,
+            "evidence_sources": evidence_sources,
+            "source_quality": self._source_quality_rows(evidence_sources),
             "assumptions": state["assumptions"],
             "decision_analysis": state["decision_analysis"],
             "disagreement": {
@@ -2722,9 +2985,13 @@ class ReliabilityPipeline:
             "trace": self.trace,
             "web_search": run.get("web_search", {"route": None, "calls": [], "documents": []}),
             "calibration": state["calibration"],
+            "calibration_metadata": state["calibration"],
             "perturbation_probe": state["perturbation_probe"],
             "causal_probe": state["perturbation_probe"],
+            "consistency_checks": self._consistency_checks(state),
+            "robustness_checks": self._robustness_checks(state),
             "features": state["features"],
+            "score_inputs": self._score_inputs(state),
             "score_caps": state["score_caps"],
             "analysis_basis": reliability["analysis_basis"],
             "export": {
@@ -2737,12 +3004,42 @@ class ReliabilityPipeline:
         return graph
 
     def _validate_graph(self, graph: Dict[str, Any]) -> None:
+        if graph.get("graph_version") == GRAPH_VERSION:
+            required_top_level = [
+                "audit_status",
+                "audit_completed_at",
+                "score_model_version",
+                "claim_audit",
+                "evidence_sources",
+                "source_quality",
+                "score_inputs",
+                "calibration_metadata",
+                "consistency_checks",
+                "robustness_checks",
+                "analysis_explanation",
+            ]
+            missing_top_level = [field for field in required_top_level if field not in graph]
+            if missing_top_level:
+                raise PipelineStageError(
+                    "invalid_reliability_graph",
+                    "graph_validation",
+                    "Reliability graph is missing required v2 fields: %s" % ", ".join(missing_top_level),
+                    retryable=False,
+                )
+            if graph.get("audit_status") != "completed":
+                raise PipelineStageError(
+                    "invalid_reliability_graph",
+                    "graph_validation",
+                    "Completed graph must have audit_status=completed.",
+                    retryable=False,
+                )
         answer = graph.get("answer") or {}
         required_answer_strings = [
             "final_answer",
             "verdict",
             "final_decision",
             "verdict_reason",
+            "reliability_explanation",
             "evidence_status",
             "main_uncertainty",
             "next_best_action",
@@ -2761,6 +3058,13 @@ class ReliabilityPipeline:
                 "invalid_reliability_graph",
                 "graph_validation",
                 "Reliability score is missing or invalid.",
+                retryable=False,
+            )
+        if graph.get("graph_version") == GRAPH_VERSION and answer.get("score_ready") is not True:
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Completed graph must mark the Reliability Score as ready.",
                 retryable=False,
             )
         if not graph.get("analysis_basis"):
@@ -2788,6 +3092,14 @@ class ReliabilityPipeline:
             for evidence_id in assessment.get("evidence_ids", []):
                 if evidence_id not in evidence_ids:
                     raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Assessment references missing evidence.", retryable=False)
+        for row in graph.get("claim_audit", []):
+            if row.get("claim_id") not in claim_ids:
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Claim audit references a missing claim.", retryable=False)
+            if row.get("relation") not in {"supported", "partially_supported", "contradicted", "not_found", "not_checkable", "insufficient_evidence"}:
+                raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Claim audit relation is invalid.", retryable=False)
+            for evidence_id in row.get("evidence_ids", []):
+                if evidence_id not in evidence_ids:
+                    raise PipelineStageError("invalid_reliability_graph", "graph_validation", "Claim audit references missing evidence.", retryable=False)
         citation_ids = {citation.get("citation_id") for citation in answer.get("citations", [])}
         for citation in answer.get("citations", []):
             evidence_id = citation.get("evidence_id")

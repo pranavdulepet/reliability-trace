@@ -37,9 +37,27 @@ Before answer generation, a provider-neutral research router records the retriev
 
 Web retrieval uses Tavily first, with `include_answer=false`; search results are source evidence, not instructions, and the configured LLM still writes the answer. This follows the public tool-use pattern used by ChatGPT Search, Claude web search, Gemini grounding, and agent-search APIs: rewrite the user need into a targeted query, retrieve sources, then answer with citations and visible tool activity. If no search key is configured, current and factual answers are visibly degraded and capped rather than treated as source-grounded.
 
-The pipeline emits provider-neutral verdict fields on every completed graph:
+The pipeline writes a completed v2 reliability graph to SQLite `runs.graph_json` and the observable trace to `runs.trace_json`. Exports return that stored graph. Production SSE streams the answer first, then `audit_progress`; the `Reliability Score` is only present in the final `completed` graph after evidence building, claim audit, scoring, calibration lookup, and robustness checks finish.
 
+Completed v2 graphs include:
+
+- `graph_version: "v2"`
+- `audit_status`
+- `audit_completed_at`
+- `score_model_version`
+- `score_inputs`
+- `score_caps`
+- `claim_audit[]`
+- `evidence_sources[]`
+- `source_quality[]`
+- `consistency_checks`
+- `robustness_checks`
+- `analysis_explanation`
+- `calibration_metadata`
 - `answer.verdict`: `rely`, `use_with_caution`, or `do_not_rely`
+- `answer.reliability_score`
+- `answer.reliability_explanation`
+- `answer.score_ready`
 - `answer.evidence_status`
 - `answer.main_uncertainty`
 - `answer.next_best_action`
@@ -52,7 +70,7 @@ The pipeline emits provider-neutral verdict fields on every completed graph:
 - `run.search_used`
 - `web_search.calls[]`
 
-Reliability scoring is diagnostic. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. Linear signal weights load from `configs/reliability_score_weights.json` when present; otherwise the built-in research-prior weights are used. The current tracked config is benchmark-tuned from official-style fixed-answer dev evals. Safety caps are not learned: they remain explicit policy for contradictions, missing required evidence, low-provenance partial support, sample conflict, and similar false-safe risks. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
+Reliability scoring is a 0-100 answer-trustability estimate under gathered evidence. Source-required questions are weighted toward claim support, retrieval alignment, and source quality; open-ended explanations weight sample consistency more heavily. Linear signal weights load from `configs/reliability_score_weights.json` when present; otherwise the built-in research-prior weights are used. The current tracked config is benchmark-tuned from official-style fixed-answer dev evals. Safety caps are not learned: they remain explicit policy for contradictions, missing required evidence, low-provenance partial support, sample conflict, and similar false-safe risks. The score does not use trace completeness, hard-coded judge dimensions, or fabricated decision utilities. Factual/current answers with no source evidence are capped and returned as `do_not_rely`. General answers without sources are marked not source-grounded instead of treated as failed factual retrieval.
 
 Claim checking has two layers. The selected provider extracts claims and assesses only the retrieved evidence snippets. A required NLI verifier then checks each claim/snippet pair and combines with the provider judgment conservatively: contradiction wins, missing evidence remains `not_found`, and provider/verifier disagreement becomes partial support unless the verifier finds contradiction. Source text is always treated as untrusted evidence, never instructions; provider output is schema-validated, retried once on invalid JSON, and redacted. Claims marked `not_checkable` remain unscored even if a provider returns a supported relation.
 
@@ -66,12 +84,11 @@ The frontend is a React + TypeScript app. It presents:
 - Provider keys and default model controls in Settings.
 - Entailment verifier readiness in Settings.
 - Search key and max-result controls in Settings. Chat does not expose a search off switch; web evidence is attempted automatically when configured.
-- Info popovers on reliability components that explain computation, research basis, and limitations.
-- Collapsible activity/details for provider calls, retrieval, checks, probes, scoring, and export.
+- One compact Reliability Score summary after the audit finishes.
+- One full reliability analysis drawer with Elicit-like sections: Overview, Evidence, Claims, Consistency, Robustness, Score, Activity, and Export.
 - About page with the research basis and trace limits.
-- Answer-integrated reliability cards and expandable details for issues, claims, sources, disagreement, calibration, robustness, activity, and export.
 
-The primary answer view is progressive: streamed answer first, inline/source citations when evidence exists, compact trust row second, detailed evidence tables only inside expandable sections. The frontend must not invent fallback verdicts or evidence states; incomplete graphs show an incomplete-analysis state.
+The primary answer view is progressive: streamed answer first, inline/source citations when evidence exists, then the final Reliability Score and short explanation after the audit completes. Detailed evidence tables stay inside the analysis drawer. The frontend must not invent fallback verdicts or evidence states; incomplete graphs show an incomplete-analysis state.
 
 ## Provider Boundary
 

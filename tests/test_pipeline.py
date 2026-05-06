@@ -80,6 +80,14 @@ def test_provider_strict_pipeline_builds_graph(monkeypatch):
     graph = run_pipeline(base_run())[-1]["graph"]
 
     assert graph["run"]["provider"] == "openai"
+    assert graph["graph_version"] == "v2"
+    assert graph["audit_status"] == "completed"
+    assert graph["answer"]["score_ready"] is True
+    assert graph["answer"]["reliability_explanation"]
+    assert graph["claim_audit"]
+    assert graph["evidence_sources"] == []
+    assert graph["score_model_version"]
+    assert graph["score_inputs"]["features"]
     assert graph["answer"]["final_answer"].startswith("Proceed only")
     assert graph["claim_assessments"][0]["assessment_method"] == "provider_entailment_verifier"
     assert graph["export"]["contains_plaintext_provider_keys"] is False
@@ -101,7 +109,7 @@ def test_pipeline_rejects_missing_provider_in_chat_run():
         asyncio.run(execute())
     except PipelineStageError as exc:
         assert exc.code == "provider_required"
-        assert exc.stage == "candidate_generation"
+        assert exc.stage == "answer_generation"
     else:
         raise AssertionError("provider_required error was not raised")
 
@@ -114,7 +122,7 @@ def test_provider_bad_answer_fails_after_retry(monkeypatch):
         run_pipeline(base_run(question="What is ReliabilityGraph?"))
     except PipelineStageError as exc:
         assert exc.code == "provider_bad_answer"
-        assert exc.stage == "candidate_generation"
+        assert exc.stage == "answer_generation"
     else:
         raise AssertionError("bad provider answer did not fail")
 
