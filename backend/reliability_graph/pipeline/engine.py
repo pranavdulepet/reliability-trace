@@ -1340,7 +1340,13 @@ class ReliabilityPipeline:
             verifier_result = self._best_verifier_result(claim["text"], evidence_items)
             provider_relation = provider_by_claim.get(claim["claim_id"], {}).get("relation")
             relation = self._combine_provider_and_verifier_relation(provider_relation, verifier_result.relation)
+            source_conflict = self._claim_has_source_conflict(evidence_items)
             why = self._combined_assessment_reason(provider_by_claim.get(claim["claim_id"]), verifier_result, relation)
+            if source_conflict and relation != "contradicted":
+                why = (
+                    why.rstrip(".")
+                    + ". A matched source snippet also appears to conflict with this claim, so inspect the evidence before relying on it."
+                )
             assessment = self._assessment_from_relation(
                 claim_id=claim["claim_id"],
                 relation=relation,
@@ -1357,10 +1363,18 @@ class ReliabilityPipeline:
                     "contradiction_score": verifier_result.contradiction_score,
                     "neutral_score": verifier_result.neutral_score,
                     "provider_relation": provider_relation,
+                    "source_conflict": source_conflict,
                 }
             )
             assessments.append(assessment)
         return assessments
+
+    def _claim_has_source_conflict(self, evidence_items: List[Dict[str, Any]]) -> bool:
+        return any(
+            item.get("support_relation") == "contradicts"
+            and float(item.get("relevance_score", 0.0)) >= 0.20
+            for item in evidence_items
+        )
 
     def _best_verifier_result(self, claim_text: str, evidence_items: List[Dict[str, Any]]) -> EntailmentResult:
         verifier = self.entailment_verifier
@@ -1601,6 +1615,21 @@ class ReliabilityPipeline:
         insufficient = len(
             [a for a in scored_assessments if a["status"] in {"insufficient_evidence", "not_found"}]
         )
+        source_conflict_claim_ids = {
+            item.get("claim_id")
+            for item in state.get("evidence", [])
+            if item.get("support_relation") == "contradicts"
+        }
+        source_conflict_assessments = [
+            assessment
+            for assessment in scored_assessments
+            if assessment.get("claim_id") in source_conflict_claim_ids or assessment.get("source_conflict")
+        ]
+        unresolved_source_conflicts = [
+            assessment
+            for assessment in source_conflict_assessments
+            if assessment.get("status") != "contradicted"
+        ]
         source_quality = self._source_quality_score(state["evidence"])
         retrieval_alignment = self._retrieval_alignment_score(state)
         retrieval_peak = self._retrieval_peak_score(state)
@@ -1611,6 +1640,7 @@ class ReliabilityPipeline:
             "evidence_required": 1.0 if evidence_required else 0.0,
             "claim_support_rate": support_points / total,
             "contradiction_rate": contradicted / total,
+            "source_conflict_rate": len(source_conflict_assessments) / total,
             "insufficient_evidence_rate": insufficient / total,
             "semantic_stability": state["semantic_stability"],
             "sample_overlap_stability": sample_overlap,
@@ -1639,6 +1669,8 @@ class ReliabilityPipeline:
                     and self._claim_by_id(state["claims"], assessment["claim_id"]).get("importance") == "high"
                 ]
             ),
+            "source_conflict_claims": len(source_conflict_assessments),
+            "unresolved_source_conflicts": len(unresolved_source_conflicts),
             "unsupported_high_impact_claims": len(high_unsupported_claims),
             "unsupported_high_impact_assumption": (
                 evidence_required
@@ -2303,6 +2335,16 @@ class ReliabilityPipeline:
     def _has_external_evidence(self, evidence: List[Dict[str, Any]]) -> bool:
         return any(item.get("source_type") not in {"system_trace", "internal_policy"} for item in evidence)
 
+    def _source_material_available(self, state: Dict[str, Any]) -> bool:
+        web_search = state["run"].get("web_search") or {}
+        calls = web_search.get("calls") or []
+        return bool(
+            self.retrieval_chunks
+            or state["run"].get("attachment_document_ids")
+            or web_search.get("documents")
+            or any(int(call.get("result_count") or 0) > 0 for call in calls)
+        )
+
     def _evidence_required_for_score(self, state: Dict[str, Any]) -> bool:
         question = state["run"]["question"].lower()
         route = ((state["run"].get("web_search") or {}).get("route") or {}).get("route")
@@ -2625,6 +2667,8 @@ class ReliabilityPipeline:
             claim = self._short_claim(claims_by_id.get(contradicted[0]["claim_id"], {}).get("text"))
             return "The score is capped because gathered evidence conflicts with this checked claim: %s" % claim
         if no_source_factual:
+            if self._source_material_available(state):
+                return "The score is low because source material was available, but no snippet directly supported the source-required claim."
             return "The score is low because this question needs source evidence, but no usable web, URL, or file evidence was available."
         if not_found:
             claim = self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
@@ -2693,6 +2737,8 @@ class ReliabilityPipeline:
         if perturbation_flip:
             return "The answer changed under a pressure prompt without new evidence."
         if no_source_factual:
+            if self._source_material_available(state):
+                return "Available source material did not directly support the source-required claim."
             return "No usable source evidence was available for a source-required question."
         if not_found:
             return "Unsupported claim: %s" % self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
@@ -2730,12 +2776,20 @@ class ReliabilityPipeline:
                 "Targets the claim that most directly lowers trust.",
             )
         if no_source_factual:
-            add(
-                "Find sources",
-                'Search for reliable primary or high-quality sources for "%s", cite them, and revise any unsupported factual claims.'
-                % question,
-                "Adds the missing evidence needed for a source-required answer.",
-            )
+            if self._source_material_available(state):
+                add(
+                    "Match sources",
+                    'Quote the exact source passage that supports "%s". If no passage supports it, rewrite the answer as unsupported.'
+                    % question,
+                    "Checks whether the available source material actually supports the answer.",
+                )
+            else:
+                add(
+                    "Find sources",
+                    'Search for reliable primary or high-quality sources for "%s", cite them, and revise any unsupported factual claims.'
+                    % question,
+                    "Adds the missing evidence needed for a source-required answer.",
+                )
         if not_found:
             claim = self._short_claim(claims_by_id.get(not_found[0]["claim_id"], {}).get("text"))
             add(
@@ -2822,6 +2876,8 @@ class ReliabilityPipeline:
         if perturbation_flip:
             return "A robustness prompt changed the answer without adding evidence."
         if no_source_factual:
+            if self._source_material_available(state):
+                return "Available source material did not directly support the factual or current parts."
             return "The factual or current parts are not grounded in attached, fetched, or web sources."
         if high_unsupported:
             claim = claims_by_id.get(high_unsupported[0]["claim_id"], {})
@@ -2851,6 +2907,8 @@ class ReliabilityPipeline:
         if perturbation_flip:
             return "Consistent answers under neutral, pressure, and false-premise prompts."
         if no_source_factual:
+            if self._source_material_available(state):
+                return "A directly matching passage from the available source material, or a narrower answer that says the source does not support the claim."
             return "A reliable dated source or uploaded document that directly supports the factual claims."
         if not_found:
             return "Source passages that directly establish the unsupported claim instead of only matching nearby terms."
@@ -2879,6 +2937,8 @@ class ReliabilityPipeline:
         if partially_supported:
             return "Open Evidence and review the partially supported claim before acting on this."
         if no_source_factual:
+            if self._source_material_available(state):
+                return "Use the answer only after matching it to an exact source passage, or rewrite it as unsupported."
             route = (state["run"].get("web_search") or {}).get("route") or {}
             calls = (state["run"].get("web_search") or {}).get("calls") or []
             if state["run"].get("search_mode") == "off":
@@ -3090,7 +3150,9 @@ class ReliabilityPipeline:
                     "contradiction_score": assessment.get("contradiction_score"),
                     "neutral_score": assessment.get("neutral_score"),
                     "support_score": assessment.get("support_score"),
-                    "risk_flags": claim.get("risk_flags", []),
+                    "risk_flags": list(claim.get("risk_flags", []))
+                    + (["source_conflict"] if assessment.get("source_conflict") else []),
+                    "source_conflict": bool(assessment.get("source_conflict")),
                 }
             )
         return rows

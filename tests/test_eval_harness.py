@@ -10,6 +10,7 @@ from backend.reliability_graph.evals import (
     expected_calibration_error,
     filter_examples_for_mode,
     grade_simpleqa_prediction,
+    _root_cause,
     ragtruth_to_example,
     redact_value,
     run_eval_example,
@@ -232,6 +233,45 @@ def test_baseline_report_preserves_relation_recall_metric():
     }
 
     assert baseline_report([result])["full_score"]["claim_relation_recall_on_bad"] == 1.0
+
+
+def test_root_cause_labels_partial_support_without_overstating_contradiction():
+    result = {
+        "metrics": {"bad_answer": True, "relation_detected": False, "score": 0.55},
+        "labels": {"bad_answer": True},
+        "graph": {
+            "evidence": [{"support_relation": "supports", "relevance_score": 0.6}],
+            "claim_assessments": [{"relation": "partially_supported"}],
+        },
+    }
+
+    assert _root_cause(result) == "partial-support ambiguity"
+
+
+def test_root_cause_labels_claim_source_matching_when_evidence_exists():
+    result = {
+        "metrics": {"bad_answer": True, "relation_detected": False, "score": 0.55},
+        "labels": {"bad_answer": True},
+        "graph": {
+            "evidence": [{"support_relation": "unknown", "relevance_score": 0.3}],
+            "claim_assessments": [{"relation": "supported"}],
+        },
+    }
+
+    assert _root_cause(result) == "claim/source matching miss"
+
+
+def test_root_cause_labels_detected_bad_answer_as_severity_tuning():
+    result = {
+        "metrics": {"bad_answer": True, "relation_detected": True, "score": 0.55},
+        "labels": {"bad_answer": True},
+        "graph": {
+            "evidence": [{"support_relation": "contradicts", "relevance_score": 0.6}],
+            "claim_assessments": [{"relation": "supported", "source_conflict": True}],
+        },
+    }
+
+    assert _root_cause(result) == "risk detected; severity tuning"
 
 
 def test_regression_gate_compares_baselines_on_same_rows():

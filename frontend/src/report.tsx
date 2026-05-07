@@ -124,7 +124,7 @@ function UncertaintyTab({ graph }: { graph: ReliabilityGraph }) {
 
 function ClaimsAuditTab({ graph }: { graph: ReliabilityGraph }) {
   const evidenceById = new Map(graph.evidence.map((item) => [item.evidence_id, item]));
-  const rows = claimAuditRows(graph).sort((left, right) => claimAuditRiskRank(left.relation, left.severity) - claimAuditRiskRank(right.relation, right.severity));
+  const rows = claimAuditRows(graph).sort((left, right) => claimAuditRiskRank(left.relation, left.severity, left.source_conflict) - claimAuditRiskRank(right.relation, right.severity, right.source_conflict));
   return (
     <div className="analysis-table-shell">
       <div className="detail-heading">
@@ -147,6 +147,7 @@ function ClaimsAuditTab({ graph }: { graph: ReliabilityGraph }) {
               <article className={`analysis-row relation-${relationClass(row.relation)}`} key={row.claim_id}>
                 <div>
                   <RelationPill relation={row.relation} />
+                  {row.source_conflict && <small className="source-conflict-note">source conflict</small>}
                   <small>{formatStatus(row.severity || "low")} risk</small>
                 </div>
                 <div>
@@ -703,7 +704,8 @@ function claimAuditRows(graph: ReliabilityGraph): ClaimAuditRow[] {
       contradiction_score: assessment?.contradiction_score,
       neutral_score: assessment?.neutral_score,
       support_score: assessment?.support_score,
-      risk_flags: claim.risk_flags ?? [],
+      risk_flags: [...(claim.risk_flags ?? []), ...(assessment?.source_conflict ? ["source_conflict"] : [])],
+      source_conflict: Boolean(assessment?.source_conflict),
     };
   });
 }
@@ -735,9 +737,10 @@ function relationSummary(relations: Record<string, number>): string {
     .join(" · ");
 }
 
-function claimAuditRiskRank(relation: string, severity: string | undefined): number {
+function claimAuditRiskRank(relation: string, severity: string | undefined, sourceConflict?: boolean): number {
   if (relation === "contradicted") return 0;
   if (relation === "not_found" || relation === "insufficient_evidence") return severity === "high" ? 1 : 2;
+  if (sourceConflict) return 2;
   if (relation === "partially_supported") return 3;
   if (relation === "not_checkable") return 5;
   return 4;

@@ -207,6 +207,7 @@ export interface ClaimAssessment {
   entailment_score?: number;
   contradiction_score?: number;
   neutral_score?: number;
+  source_conflict?: boolean;
 }
 
 export interface Assumption {
@@ -313,6 +314,7 @@ export interface ReliabilityGraph {
     neutral_score?: number | null;
     support_score?: number | null;
     risk_flags?: string[];
+    source_conflict?: boolean;
   }>;
   evidence_sources?: Array<{
     source_id: string;

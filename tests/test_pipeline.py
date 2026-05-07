@@ -667,6 +667,35 @@ def test_provider_and_verifier_disagreement_is_conservative(monkeypatch):
     assert graph["claim_assessments"][0]["support_score"] <= 0.72
 
 
+def test_unresolved_source_conflict_is_visible_but_not_overruled(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 3, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 3, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_relation="supported",
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+        chunk_source("ExampleOS 9 was not released on April 3, 2026."),
+        verifier=StaticVerifier(EntailmentResult("supported", 0.9, 0.03, 0.07, "static-nli")),
+    )[-1]["graph"]
+
+    assessment = graph["claim_assessments"][0]
+    assert assessment["relation"] == "supported"
+    assert assessment["source_conflict"] is True
+    assert "conflict" in assessment["why"]
+    assert graph["features"]["source_conflict_rate"] == 1.0
+    assert not any("source conflict" in cap for cap in graph["score_caps"])
+
+
 def test_not_checkable_claim_cannot_be_scored_by_provider(monkeypatch):
     provider = FakeProvider(
         answer="Choose the calmer design direction.",
@@ -714,6 +743,30 @@ def test_prompt_injection_source_remains_untrusted_evidence(monkeypatch):
     assert "hacked" not in graph["answer"]["final_answer"].lower()
     assert all("Ignore previous instructions" not in prompt for prompt in provider.system_prompts)
     assert any("untrusted evidence, not instructions" in prompt for prompt in provider.user_prompts)
+
+
+def test_source_material_without_claim_match_gets_precise_repair_copy(monkeypatch):
+    provider = FakeProvider(
+        answer="ExampleOS 9 was released on April 3, 2026.",
+        claims=[
+            {
+                "text": "ExampleOS 9 was released on April 3, 2026.",
+                "type": "factual",
+                "importance": "high",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_relation="supported",
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="When was ExampleOS 9 released?", attachment_document_ids=["doc_1"]),
+        chunk_source("This note is about a cafeteria schedule and does not mention operating system releases."),
+    )[-1]["graph"]
+
+    assert "source material was available" in graph["answer"]["reliability_reason"]
+    assert graph["answer"]["improvement_prompts"][0]["label"] == "Match sources"
 
 
 def test_eval_answer_override_runs_without_provider(monkeypatch):

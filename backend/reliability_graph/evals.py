@@ -575,11 +575,18 @@ def _root_cause(result: Dict[str, Any]) -> str:
     if metrics.get("bad_answer") and not assessments:
         return "claim extraction miss"
     if metrics.get("bad_answer") and not metrics.get("relation_detected"):
+        relations = {str(item.get("relation") or item.get("status") or "").lower() for item in assessments}
+        if "partially_supported" in relations or "partial" in relations:
+            return "partial-support ambiguity"
+        if "not_found" in relations or "insufficient_evidence" in relations:
+            return "unsupported-claim miss"
         if graph.get("evidence"):
-            return "contradiction miss"
+            return "claim/source matching miss"
         return "retrieval miss"
     if metrics.get("bad_answer") and float(metrics.get("score", 0.0)) >= 0.6:
         return "score weighting/cap issue"
+    if metrics.get("bad_answer") and metrics.get("relation_detected"):
+        return "risk detected; severity tuning"
     if not metrics.get("bad_answer") and float(metrics.get("score", 0.0)) < 0.55:
         return "over-conservative scoring"
     return "benchmark adapter issue"
@@ -936,6 +943,10 @@ def _example_metrics(graph: Dict[str, Any], labels: Dict[str, Any]) -> Dict[str,
         correctness_value = 1.0 if correctness else 0.0
     relation_detected = any(
         item.get("relation") in {"not_found", "contradicted"} for item in graph.get("claim_assessments", [])
+    ) or any(
+        item.get("source_conflict") for item in graph.get("claim_assessments", [])
+    ) or any(
+        item.get("support_relation") == "contradicts" for item in graph.get("evidence", [])
     )
     sentence_items = _sentence_metric_items(graph, labels)
     selfcheck_ngram = _selfcheck_ngram_risk(graph, labels)

@@ -51,6 +51,8 @@ The tracked score weights come from official-style fixed-answer development eval
 
 Current validation supports the score as a diagnostic ranking signal. It does not yet support claims of universal calibration across all domains, providers, users, or current-events queries.
 
+The latest audit also records unresolved source conflicts: when a matched source snippet appears to conflict with a claim but the provider plus entailment verifier do not mark the claim as contradicted, the claim remains conservatively labeled by the verifier result while the conflict is surfaced for review. This improves failure visibility without pretending a lightweight source-match signal is a definitive contradiction detector.
+
 Latest local review gate run:
 
 ```bash
@@ -59,12 +61,12 @@ UV_CACHE_DIR=.uv-cache uv run python scripts/run_reliability_evals.py --benchmar
 
 The May 7, 2026 run used cached official datasets and no live provider calls. It passed the regression gate with:
 
-| Benchmark | N | AUROC | AUPRC | False-safe |
-| --- | ---: | ---: | ---: | ---: |
-| RAGTruth | 50 | 0.6183 | 0.4810 | 0.0000 |
-| SelfCheckGPT WikiBio | 50 | 0.9894 | 1.0000 | 0.0000 |
-| SimpleQA oracle-answer slice | 50 | n/a | n/a | n/a |
-| Overall fixed-answer gate | 150 | 0.8543 | 0.7077 | 0.0000 |
+| Benchmark | N | AUROC | AUPRC | Claim relation recall on bad answers | False-safe |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| RAGTruth | 50 | 0.6183 | 0.4810 | 0.7000 | 0.0000 |
+| SelfCheckGPT WikiBio | 50 | 0.9894 | 1.0000 | 0.7447 | 0.0000 |
+| SimpleQA oracle-answer slice | 50 | n/a | n/a | n/a | n/a |
+| Overall fixed-answer gate | 150 | 0.8543 | 0.7077 | 0.7313 | 0.0000 |
 
 This is good enough to show a conservative prototype with no false-safe cases in the small gate. It is not enough to claim state-of-the-art reliability detection. RAGTruth remains the main research weakness.
 

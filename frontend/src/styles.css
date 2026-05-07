@@ -1092,6 +1092,19 @@ label {
   color: var(--source);
 }
 
+.source-conflict-note {
+  background: var(--red-soft);
+  border-radius: 999px;
+  color: var(--red);
+  display: inline-flex;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-top: 6px;
+  padding: 3px 8px;
+  width: fit-content;
+}
+
 .reliability-score-panel {
   align-items: start;
   background: var(--surface);
