@@ -348,6 +348,40 @@ def test_demo_can_disable_key_management(monkeypatch):
     assert search_response.status_code == 403
 
 
+def test_public_demo_allows_frontend_shell_but_blocks_api_without_session(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+
+    assert api_module._is_public_path("/")
+    assert api_module._is_public_path("/assets/index.js")
+    assert api_module._is_public_path("/settings")
+    assert api_module._is_public_path("/api/access/status")
+    assert not api_module._is_public_path("/api/providers")
+    assert not api_module._is_public_path("/docs")
+    assert not api_module._is_public_path("/openapi.json")
+
+
+def test_public_health_redacts_internal_paths_and_sets_security_headers(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "secret", "test-secret")
+    monkeypatch.setattr(api_module.settings, "cookie_secure", True)
+    monkeypatch.setattr(api_module, "entailment_verifier", FixtureEntailmentVerifier())
+
+    with TestClient(api_module.app) as client:
+        response = client.get("/health")
+
+    body = response.json()
+
+    assert response.status_code == 200
+    assert "db_path" not in body
+    assert "user_scope" not in body
+    assert "cache_dir" not in body["verifier"]
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
 class FakeProvider:
     async def generate(self, request):
         system = "\n".join(message.content for message in request.messages if message.role == "system")

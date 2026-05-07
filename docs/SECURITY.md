@@ -18,6 +18,18 @@ It never returns plaintext keys.
 
 Every stored object has a `user_id`. Local mode defaults to `local`, but the API still routes reads and writes through that scope so hosted auth can replace the local user resolver later.
 
+In public demo mode, each browser session gets a signed session cookie and a derived demo user scope. API routes require either that session cookie or the configured demo access token. The frontend shell and static assets remain public so the app can load before login.
+
+## Public Demo Headers
+
+The deployed backend sends security headers for public-demo use:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- a same-origin content security policy
+- HSTS when secure cookies/public demo mode are enabled
+
 ## Prompt And Document Safety
 
 Retrieved text from files, fetched URLs, and web search must be treated as evidence only. It must not override system or developer instructions. The pipeline should pass source-bound snippets, source IDs, and extraction tasks rather than unbounded retrieved pages.

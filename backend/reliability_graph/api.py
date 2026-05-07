@@ -6,11 +6,13 @@ import os
 import re
 import secrets
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from .benchmarks import build_benchmark_report
 from .config import ENV_KEY_BY_PROVIDER, ENV_KEY_BY_SEARCH_PROVIDER, settings
@@ -55,20 +57,20 @@ _rate_limit_buckets: Dict[str, List[float]] = {}
 @app.middleware("http")
 async def demo_access_guard(request: Request, call_next):
     if request.method == "OPTIONS" or _is_public_path(request.url.path):
-        return await call_next(request)
+        return _with_security_headers(await call_next(request))
     if not settings.access_token:
-        return await call_next(request)
+        return _with_security_headers(await call_next(request))
     if not _request_is_authenticated(request):
-        return JSONResponse(
+        return _with_security_headers(JSONResponse(
             status_code=401,
             content={"detail": {"code": "access_required", "message": "Enter the demo access code to continue."}},
-        )
+        ))
     if not _rate_limit_allows(request):
-        return JSONResponse(
+        return _with_security_headers(JSONResponse(
             status_code=429,
             content={"detail": {"code": "rate_limited", "message": "Demo request limit reached. Try again later."}},
-        )
-    return await call_next(request)
+        ))
+    return _with_security_headers(await call_next(request))
 
 
 @app.on_event("startup")
@@ -84,15 +86,17 @@ def startup() -> None:
 def health():
     storage.init_db()
     verifier = entailment_verifier.status()
-    return {
+    payload = {
         "status": "ok" if verifier["ready"] else "setup_required",
         "version": "0.1.0",
-        "db_path": str(settings.db_path),
-        "user_scope": settings.user_id,
         "public_demo": settings.public_demo,
         "access_required": bool(settings.access_token),
-        "verifier": verifier,
+        "verifier": _public_verifier_status(verifier),
     }
+    if not settings.public_demo:
+        payload["db_path"] = str(settings.db_path)
+        payload["user_scope"] = settings.user_id
+    return payload
 
 
 @app.get("/api/access/status")
@@ -751,7 +755,40 @@ def _conversation_title(content: str) -> str:
 
 
 def _is_public_path(path: str) -> bool:
-    return path in {"/health", "/api/access/status", "/api/access/session"} or path.startswith("/docs") or path.startswith("/openapi.json")
+    if path in {"/health", "/api/access/status", "/api/access/session"}:
+        return True
+    if settings.public_demo and (path.startswith("/docs") or path.startswith("/openapi.json")):
+        return False
+    if not settings.public_demo and (path.startswith("/docs") or path.startswith("/openapi.json")):
+        return True
+    return not path.startswith("/api/")
+
+
+def _with_security_headers(response: Response) -> Response:
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; img-src 'self' data: https:; connect-src 'self'; "
+        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    )
+    if settings.public_demo or settings.cookie_secure:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
+
+
+def _public_verifier_status(verifier: Dict[str, object]) -> Dict[str, object]:
+    if not settings.public_demo:
+        return verifier
+    return {
+        "ready": verifier.get("ready"),
+        "provider": verifier.get("provider"),
+        "model": verifier.get("model"),
+        "message": verifier.get("message"),
+    }
 
 
 def _request_is_authenticated(request: Request) -> bool:
@@ -866,3 +903,20 @@ def _sanitize_error(message: str) -> str:
     for pattern in SECRET_PATTERNS:
         cleaned = pattern.sub(lambda match: (match.group(1) if match.lastindex else "") + "[redacted]", cleaned)
     return cleaned[:500]
+
+
+FRONTEND_DIST = Path(os.getenv("RELIABILITY_GRAPH_FRONTEND_DIST", "frontend/dist"))
+if FRONTEND_DIST.exists():
+    assets_dir = FRONTEND_DIST / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{frontend_path:path}", include_in_schema=False)
+    async def serve_frontend(frontend_path: str = ""):
+        if frontend_path.startswith("api/") or frontend_path in {"health", "docs", "openapi.json"}:
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = FRONTEND_DIST / frontend_path
+        if frontend_path and candidate.is_file() and FRONTEND_DIST in candidate.resolve().parents:
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST / "index.html")

@@ -26,7 +26,7 @@ Docker is optional:
 docker compose up --build
 ```
 
-For a public demo with a static GitHub Pages frontend and hosted backend, see `docs/DEPLOYMENT.md`.
+For a public demo on Render, see `docs/DEPLOYMENT.md`. The Render deployment serves the frontend and backend from one web service so SSE streaming, cookies, and API calls stay same-origin.
 
 ## Checks
 
