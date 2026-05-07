@@ -1756,7 +1756,56 @@ label {
   font-size: clamp(2rem, 3.2vw, 3.2rem);
 }
 
-.about-grid {
+.about-eyebrow {
+  color: var(--accent);
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+}
+
+.about-principle {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-md);
+  color: var(--text-soft);
+  margin-top: 14px;
+  padding: 16px 18px;
+}
+
+.about-principle strong {
+  color: var(--text);
+}
+
+.about-principle p {
+  line-height: 1.55;
+  margin: 6px 0 0;
+}
+
+.about-section-heading {
+  align-items: end;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin: 32px 0 12px;
+}
+
+.about-section-heading h2 {
+  font-size: 1.35rem;
+  line-height: 1.15;
+  margin: 0;
+}
+
+.about-section-heading p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 520px;
+}
+
+.about-reference-list {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1779,13 +1828,73 @@ label {
 
 .about-method p {
   color: var(--muted);
+  line-height: 1.55;
   margin-top: 8px;
+}
+
+.about-method small {
+  color: var(--source);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin-top: 12px;
+}
+
+.about-score-grid,
+.about-storage {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.about-score-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.about-storage {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.about-score-grid article,
+.about-storage article {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.about-score-grid span {
+  color: var(--accent);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.about-score-grid p,
+.about-storage p {
+  color: var(--muted);
+  line-height: 1.55;
+  margin: 0;
 }
 
 .research-card {
   color: var(--text);
   min-height: 128px;
   text-decoration: none;
+}
+
+.research-card span {
+  color: var(--source);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  margin-bottom: 8px;
 }
 
 .research-card:hover {
@@ -1937,6 +2046,8 @@ th {
 
   .settings-columns,
   .about-method,
+  .about-score-grid,
+  .about-storage,
   .reliability-score-panel,
   .risk-summary,
   .analysis-table-head,
@@ -1948,6 +2059,11 @@ th {
 
   .error-banner {
     left: 12px;
+  }
+
+  .about-section-heading {
+    align-items: start;
+    display: grid;
   }
 }
 

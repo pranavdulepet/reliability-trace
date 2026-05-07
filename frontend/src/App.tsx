@@ -852,44 +852,148 @@ function SettingsView(props: {
 }
 
 function AboutView() {
-  const papers = [
-    ["FActScore", "Atomic fact decomposition and source support checks.", "https://aclanthology.org/2023.emnlp-main.741/"],
-    ["FEVER", "Claim verification labels: support, refute, and not enough information.", "https://aclanthology.org/N18-1074/"],
-    ["RAGTruth", "Source-grounded hallucination labels for retrieval-augmented answers.", "https://aclanthology.org/2024.acl-long.585/"],
-    ["SelfCheckGPT", "Sampling consistency as hallucination evidence.", "https://arxiv.org/abs/2303.08896"],
-    ["Semantic Entropy", "Meaning-level disagreement across samples.", "https://www.nature.com/articles/s41586-024-07421-0"],
-    ["SAFE / LongFact", "Search-augmented factuality checks.", "https://arxiv.org/abs/2403.18802"],
-    ["Calibration", "Reliability diagrams, ECE, and score calibration.", "https://proceedings.mlr.press/v70/guo17a.html"],
-    ["Unfaithful CoT", "Why hidden reasoning is not treated as proof.", "https://arxiv.org/abs/2305.04388"],
+  const methods = [
+    {
+      title: "Evidence",
+      body:
+        "Checks whether the answer's factual claims are supported, contradicted, or missing support from the sources gathered for the question.",
+    },
+    {
+      title: "Stability",
+      body:
+        "Checks whether alternate answers converge on the same meaning. Disagreement is a warning; agreement does not replace evidence.",
+    },
+    {
+      title: "Next prompts",
+      body:
+        "Suggests follow-up prompts that can improve the answer: add better sources, resolve contradictions, or narrow broad claims.",
+    },
+  ];
+  const scoreFacts = [
+    ["High score", "The answer is well supported by the gathered evidence and did not show major instability."],
+    ["Medium score", "The answer may be useful, but some claims, sources, or assumptions need checking."],
+    ["Low score", "The answer has weak evidence, a contradiction, or instability that makes it unsafe to rely on."],
+    ["Important", "The score is not a guarantee of truth. Use it with the reason, citations, and next prompts."],
+  ];
+  const references = [
+    {
+      title: "FActScore",
+      authors: "Min et al., EMNLP 2023",
+      body: "Atomic factuality checking for long-form answers.",
+      href: "https://aclanthology.org/2023.emnlp-main.741/",
+    },
+    {
+      title: "SAFE / LongFact",
+      authors: "Wei et al., 2024",
+      body: "Search-based checking of individual factual claims.",
+      href: "https://deepmind.google/research/publications/85420/",
+    },
+    {
+      title: "FEVER",
+      authors: "Thorne et al., NAACL 2018",
+      body: "Support, refute, and not-enough-information claim labels.",
+      href: "https://aclanthology.org/N18-1074/",
+    },
+    {
+      title: "RAGTruth",
+      authors: "Niu et al., ACL 2024",
+      body: "Hallucination evaluation for retrieval-augmented answers.",
+      href: "https://aclanthology.org/2024.acl-long.585/",
+    },
+    {
+      title: "SelfCheckGPT",
+      authors: "Manakul et al., EMNLP 2023",
+      body: "Sampling consistency as a hallucination-risk signal.",
+      href: "https://aclanthology.org/2023.emnlp-main.557/",
+    },
+    {
+      title: "Semantic Entropy",
+      authors: "Farquhar et al., Nature 2024",
+      body: "Meaning-level uncertainty across generated answers.",
+      href: "https://www.nature.com/articles/s41586-024-07421-0",
+    },
+    {
+      title: "Calibration",
+      authors: "Guo et al., ICML 2017",
+      body: "Calibration methods for interpreting model scores.",
+      href: "https://proceedings.mlr.press/v70/guo17a.html",
+    },
+    {
+      title: "Explanation faithfulness",
+      authors: "Turpin et al., NeurIPS 2023",
+      body: "Why visible explanations should not be treated as proof.",
+      href: "https://proceedings.neurips.cc/paper_files/paper/2023/hash/ed3fea9033a80fea1376299fa7863f4a-Abstract-Conference.html",
+    },
   ];
   return (
     <section className="about-page">
       <div className="about-hero">
-        <h1>ReliabilityGraph helps decide whether an answer is usable.</h1>
+        <span className="about-eyebrow">About ReliabilityGraph</span>
+        <h1>Ask a question. Get an answer. See whether to trust it.</h1>
         <p>
-          The system answers first, then audits claim evidence, answer stability, and practical risk. The Reliability Score is an audit signal
-          under gathered evidence, not a promise that the answer is true.
+          ReliabilityGraph is a chat assistant for questions where accuracy matters. It answers first, gathers evidence when available, checks
+          the answer's main claims, and explains what would make the answer more reliable.
         </p>
       </div>
+      <div className="about-principle">
+        <strong>What the score means</strong>
+        <p>
+          The Reliability Score is a 0-100 signal for how usable the answer appears under the available evidence. It is not a guarantee, so the
+          reason, citations, and suggested next prompts matter as much as the number.
+        </p>
+      </div>
+      <div className="about-section-heading">
+        <h2>What gets checked</h2>
+        <p>The product focuses on signals that help you decide what to do next.</p>
+      </div>
       <div className="about-method">
+        {methods.map((method) => (
+          <article key={method.title}>
+            <strong>{method.title}</strong>
+            <p>{method.body}</p>
+          </article>
+        ))}
+      </div>
+      <div className="about-section-heading">
+        <h2>How to read the score</h2>
+        <p>Start with the score, then read the reason and the next prompt before acting.</p>
+      </div>
+      <div className="about-score-grid">
+        {scoreFacts.map(([label, body]) => (
+          <article key={label}>
+            <span>{label}</span>
+            <p>{body}</p>
+          </article>
+        ))}
+      </div>
+      <div className="about-section-heading">
+        <h2>When to rely on it</h2>
+        <p>Use the answer differently depending on the stakes.</p>
+      </div>
+      <div className="about-storage">
         <article>
-          <strong>Evidence check</strong>
-          <p>Atomic claims are compared with attached, URL, and web sources. Contradictions and missing source support matter most for factual answers.</p>
+          <strong>Everyday questions</strong>
+          <p>A medium or high score is often enough to continue, especially when the answer is explanatory or low-risk.</p>
         </article>
         <article>
-          <strong>Stability check</strong>
-          <p>Independent samples are compared for meaning-level agreement. Agreement is useful, but it cannot prove unsupported claims.</p>
+          <strong>Current facts</strong>
+          <p>Look for citations and supported claims. If sources are missing or weak, ask for stronger evidence.</p>
         </article>
         <article>
-          <strong>Repair prompts</strong>
-          <p>The app suggests the next prompt or source request that would most improve reliability for this specific answer.</p>
+          <strong>High-stakes decisions</strong>
+          <p>Use the analysis as a review aid, not a final authority. Verify medical, legal, financial, or safety claims with qualified sources.</p>
         </article>
       </div>
-      <div className="about-grid">
-        {papers.map(([title, body, href]) => (
-          <a className="research-card" href={href} key={title} rel="noreferrer" target="_blank">
-            <strong>{title}</strong>
-            <p>{body}</p>
+      <div className="about-section-heading">
+        <h2>Research basis</h2>
+        <p>The reliability layer is based on established work in factuality, retrieval-grounded checking, consistency, and calibration.</p>
+      </div>
+      <div className="about-reference-list">
+        {references.map((reference) => (
+          <a className="research-card" href={reference.href} key={reference.title} rel="noreferrer" target="_blank">
+            <span>{reference.authors}</span>
+            <strong>{reference.title}</strong>
+            <p>{reference.body}</p>
           </a>
         ))}
       </div>
