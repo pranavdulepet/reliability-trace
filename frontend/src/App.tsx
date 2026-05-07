@@ -54,6 +54,12 @@ const MAX_ATTACHMENTS = 6;
 const MAX_FILE_BYTES = 1_000_000;
 const MAX_URL_LENGTH = 2000;
 
+function viewFromPath(pathname: string): View {
+  if (pathname.endsWith("/about")) return "about";
+  if (pathname.endsWith("/settings")) return "settings";
+  return "chat";
+}
+
 export interface DraftAttachment {
   id: string;
   kind: "file" | "url";
@@ -79,7 +85,7 @@ function App() {
   const [keyProvider, setKeyProvider] = useState("");
   const [keyValue, setKeyValue] = useState("");
   const [searchKeyValue, setSearchKeyValue] = useState("");
-  const [view, setView] = useState<View>("chat");
+  const [view, setView] = useState<View>(() => viewFromPath(window.location.pathname));
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [streamingRunId, setStreamingRunId] = useState<string | null>(null);
   const [streamingAnswer, setStreamingAnswer] = useState("");
@@ -96,6 +102,12 @@ function App() {
 
   useEffect(() => {
     void bootstrapWorkspace().catch(showError);
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => setView(viewFromPath(window.location.pathname));
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   useEffect(() => {
@@ -162,7 +174,7 @@ function App() {
 
   async function handleNewChat() {
     clearActiveConversation();
-    setView("chat");
+    navigateView("chat");
   }
 
   async function handleSelectConversation(conversationId: string) {
@@ -170,7 +182,15 @@ function App() {
     setEvents([]);
     setStreamGraph(null);
     setStreamingRunId(null);
-    setView("chat");
+    navigateView("chat");
+  }
+
+  function navigateView(nextView: View) {
+    setView(nextView);
+    const nextPath = nextView === "chat" ? "/" : `/${nextView}`;
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+    }
   }
 
   async function handleSaveKey(event: FormEvent) {
@@ -471,8 +491,8 @@ function App() {
         onNewChat={() => void handleNewChat()}
         onSelectConversation={(id) => void handleSelectConversation(id)}
         onDeleteConversation={(id) => void handleDeleteConversation(id)}
-        onOpenAbout={() => setView("about")}
-        onOpenSettings={() => setView("settings")}
+        onOpenAbout={() => navigateView("about")}
+        onOpenSettings={() => navigateView("settings")}
       />
 
       <main className="chat-main">
@@ -525,7 +545,7 @@ function App() {
             onSubmit={handleSubmit}
             onAddFiles={handleAddFiles}
             onRemoveAttachment={removeAttachment}
-            onOpenSettings={() => setView("settings")}
+            onOpenSettings={() => navigateView("settings")}
           />
         )}
       </main>
