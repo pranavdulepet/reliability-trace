@@ -28,6 +28,8 @@ docker compose up --build
 
 For a public demo on Render, see `docs/DEPLOYMENT.md`. The Render deployment serves the frontend and backend from one web service so SSE streaming, cookies, and API calls stay same-origin.
 
+For research review, start with `docs/REVIEW_READINESS.md`; it states what the Reliability Score can and cannot claim.
+
 ## Checks
 
 ```bash

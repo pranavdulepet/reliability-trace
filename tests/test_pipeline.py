@@ -100,6 +100,16 @@ def test_provider_strict_pipeline_builds_graph(monkeypatch):
     assert "preview" not in json.dumps(graph["disagreement"]["candidate_answers"]).lower()
 
 
+def test_benchmark_tuned_weight_variants_are_not_labeled_research_prior(monkeypatch):
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    monkeypatch.setitem(engine_module.SCORE_WEIGHT_METADATA, "source", "benchmark_tuned_evidence_first_v2")
+
+    calibration = pipeline._calibration()
+
+    assert calibration["status"] == "benchmark_tuned"
+    assert "not a calibrated probability" in calibration["note"]
+
+
 def test_pipeline_rejects_missing_provider_in_chat_run():
     async def execute():
         pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())

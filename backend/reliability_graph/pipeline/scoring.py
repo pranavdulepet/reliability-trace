@@ -118,6 +118,13 @@ def compute_reliability_score(
     ):
         score = min(score, 60)
         applied.append("partial source support without sample corroboration: score capped at 60")
+    if (
+        caps.get("evidence_required")
+        and int(caps.get("partial_support_claims", 0)) > 0
+        and retrieval_alignment < 0.50
+    ):
+        score = min(score, 55)
+        applied.append("partial source support with weak retrieval alignment: score capped at 55")
     elif (
         caps.get("evidence_required")
         and int(caps.get("partial_support_claims", 0)) > 0

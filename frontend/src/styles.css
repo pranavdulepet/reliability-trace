@@ -1763,6 +1763,25 @@ label {
   margin-top: 14px;
 }
 
+.about-method {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.about-method article {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.about-method p {
+  color: var(--muted);
+  margin-top: 8px;
+}
+
 .research-card {
   color: var(--text);
   min-height: 128px;
@@ -1917,6 +1936,7 @@ th {
   }
 
   .settings-columns,
+  .about-method,
   .reliability-score-panel,
   .risk-summary,
   .analysis-table-head,

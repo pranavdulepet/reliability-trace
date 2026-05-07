@@ -18,7 +18,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Graph validation before completion so required reliability fields, score metadata, citations, and claim/evidence references cannot silently render as invented frontend state.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
-- External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; source-required answers use evidence-first weighting and safety caps remain explicit product policy.
+- External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; source-required answers use evidence-first weighting and safety caps remain explicit product policy. `docs/REVIEW_READINESS.md` states the current scientific claim boundary and validation gaps for research review.
 - RAG/source-grounding hardening for meta-claim filtering, wider per-claim evidence retrieval, structured negation, unit-aware numeric contradiction checks, and web-result published-date preservation.
 - Live provider perturbation checks for connected provider runs.
 - Security defaults: provider keys never enter frontend code, saved keys are encrypted, exports exclude plaintext keys, and the main UI requires a connected provider plus ready entailment verifier before answer generation.

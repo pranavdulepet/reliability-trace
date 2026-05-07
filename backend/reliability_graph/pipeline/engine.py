@@ -1781,13 +1781,13 @@ class ReliabilityPipeline:
 
     def _calibration(self) -> Dict[str, Any]:
         if self.calibration_report.get("label_count", 0) <= 0:
-            if SCORE_WEIGHT_METADATA.get("source") == "benchmark_tuned":
+            if self._score_weights_are_benchmark_tuned():
                 return {
                     "status": "benchmark_tuned",
                     "display": "Benchmark-tuned Reliability Score",
                     "note": (
-                        "Score weights were fitted on official-style reliability benchmarks to improve trust ranking. "
-                        "The score estimates answer reliability under the gathered evidence; it is not a guarantee."
+                        "Score weights were fitted on official-style reliability benchmark examples to improve risk ranking. "
+                        "The score is an audit signal under gathered evidence, not a calibrated probability or guarantee."
                     ),
                     "benchmark": self.calibration_report,
                     "score_weights": SCORE_WEIGHT_METADATA,
@@ -1806,6 +1806,10 @@ class ReliabilityPipeline:
             "benchmark": self.calibration_report,
             "score_weights": SCORE_WEIGHT_METADATA,
         }
+
+    def _score_weights_are_benchmark_tuned(self) -> bool:
+        source = str(SCORE_WEIGHT_METADATA.get("source") or "")
+        return source == "benchmark_tuned" or source.startswith("benchmark_tuned_")
 
     async def _perturbation_probe(self, state: Dict[str, Any], resolve_key: ProviderKeyResolver) -> Dict[str, Any]:
         run = state["run"]

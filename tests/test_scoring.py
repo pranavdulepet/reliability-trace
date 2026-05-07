@@ -114,6 +114,20 @@ def test_score_caps_uncorroborated_partial_support_as_not_reliable():
     assert any("partial source support without sample corroboration" in cap for cap in caps)
 
 
+def test_score_caps_partial_support_with_weak_retrieval_alignment():
+    features = perfect_features()
+    features["retrieval_alignment_score"] = 0.49
+    features["retrieval_peak_score"] = 0.8
+
+    score, caps = compute_reliability_score(
+        features,
+        {"evidence_required": True, "partial_support_claims": 1},
+    )
+
+    assert score == 55
+    assert any("partial source support with weak retrieval alignment" in cap for cap in caps)
+
+
 def test_score_caps_candidate_answer_conflicts():
     features = perfect_features()
     features["sample_conflict_rate"] = 1.0

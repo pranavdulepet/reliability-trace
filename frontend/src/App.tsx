@@ -854,6 +854,8 @@ function SettingsView(props: {
 function AboutView() {
   const papers = [
     ["FActScore", "Atomic fact decomposition and source support checks.", "https://aclanthology.org/2023.emnlp-main.741/"],
+    ["FEVER", "Claim verification labels: support, refute, and not enough information.", "https://aclanthology.org/N18-1074/"],
+    ["RAGTruth", "Source-grounded hallucination labels for retrieval-augmented answers.", "https://aclanthology.org/2024.acl-long.585/"],
     ["SelfCheckGPT", "Sampling consistency as hallucination evidence.", "https://arxiv.org/abs/2303.08896"],
     ["Semantic Entropy", "Meaning-level disagreement across samples.", "https://www.nature.com/articles/s41586-024-07421-0"],
     ["SAFE / LongFact", "Search-augmented factuality checks.", "https://arxiv.org/abs/2403.18802"],
@@ -863,11 +865,25 @@ function AboutView() {
   return (
     <section className="about-page">
       <div className="about-hero">
-        <h1>ReliabilityGraph explains why an answer should or should not be trusted.</h1>
+        <h1>ReliabilityGraph helps decide whether an answer is usable.</h1>
         <p>
-          The system shows observable activity, source support, uncertainty, disagreement, robustness checks, and calibration signals.
-          It does not invent hidden reasoning traces.
+          The system answers first, then audits claim evidence, answer stability, and practical risk. The Reliability Score is an audit signal
+          under gathered evidence, not a promise that the answer is true.
         </p>
+      </div>
+      <div className="about-method">
+        <article>
+          <strong>Evidence check</strong>
+          <p>Atomic claims are compared with attached, URL, and web sources. Contradictions and missing source support matter most for factual answers.</p>
+        </article>
+        <article>
+          <strong>Stability check</strong>
+          <p>Independent samples are compared for meaning-level agreement. Agreement is useful, but it cannot prove unsupported claims.</p>
+        </article>
+        <article>
+          <strong>Repair prompts</strong>
+          <p>The app suggests the next prompt or source request that would most improve reliability for this specific answer.</p>
+        </article>
       </div>
       <div className="about-grid">
         {papers.map(([title, body, href]) => (
