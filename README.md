@@ -26,6 +26,8 @@ Docker is optional:
 docker compose up --build
 ```
 
+For a public demo with a static GitHub Pages frontend and hosted backend, see `docs/DEPLOYMENT.md`.
+
 ## Checks
 
 ```bash

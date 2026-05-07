@@ -255,6 +255,99 @@ def test_delete_conversation_endpoint_removes_chat_messages_and_runs(tmp_path, m
         storage.get_run(api_module.settings.user_id, run["run_id"])
 
 
+def test_demo_access_guard_requires_valid_session(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+    monkeypatch.setattr(api_module.settings, "secret", "test-secret")
+    monkeypatch.setattr(api_module.settings, "cookie_secure", False)
+    monkeypatch.setattr(api_module.settings, "rate_limit_requests", 120)
+
+    with TestClient(api_module.app) as client:
+        blocked = client.get("/api/providers")
+        wrong = client.post("/api/access/session", json={"access_code": "wrong"})
+        session = client.post("/api/access/session", json={"access_code": "demo-code"})
+        allowed = client.get("/api/providers")
+
+    assert blocked.status_code == 401
+    assert blocked.json()["detail"]["code"] == "access_required"
+    assert wrong.status_code == 401
+    assert session.status_code == 200
+    assert "rg_access=" in session.headers["set-cookie"]
+    assert allowed.status_code == 200
+
+
+def test_demo_rate_limit_counts_authenticated_requests(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+    monkeypatch.setattr(api_module.settings, "secret", "test-secret")
+    monkeypatch.setattr(api_module.settings, "cookie_secure", False)
+    monkeypatch.setattr(api_module.settings, "rate_limit_requests", 1)
+    monkeypatch.setattr(api_module.settings, "rate_limit_window_seconds", 3600)
+    api_module._rate_limit_buckets.clear()
+
+    with TestClient(api_module.app) as client:
+        session = client.post("/api/access/session", json={"access_code": "demo-code"})
+        first = client.get("/api/providers")
+        second = client.get("/api/verifier")
+
+    assert session.status_code == 200
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+def test_demo_rate_limit_counts_access_attempts(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+    monkeypatch.setattr(api_module.settings, "secret", "test-secret")
+    monkeypatch.setattr(api_module.settings, "cookie_secure", False)
+    monkeypatch.setattr(api_module.settings, "rate_limit_requests", 1)
+    monkeypatch.setattr(api_module.settings, "rate_limit_window_seconds", 3600)
+    api_module._rate_limit_buckets.clear()
+
+    with TestClient(api_module.app) as client:
+        first = client.post("/api/access/session", json={"access_code": "wrong"})
+        second = client.post("/api/access/session", json={"access_code": "demo-code"})
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+
+
+def test_demo_sessions_get_isolated_conversation_scopes(tmp_path, monkeypatch):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    monkeypatch.setattr(api_module, "storage", storage)
+    monkeypatch.setattr(api_module.settings, "access_token", "demo-code")
+    monkeypatch.setattr(api_module.settings, "public_demo", True)
+    monkeypatch.setattr(api_module.settings, "secret", "test-secret")
+    monkeypatch.setattr(api_module.settings, "cookie_secure", False)
+    monkeypatch.setattr(api_module.settings, "rate_limit_requests", 120)
+    api_module._rate_limit_buckets.clear()
+
+    with TestClient(api_module.app) as first_client, TestClient(api_module.app) as second_client:
+        assert first_client.post("/api/access/session", json={"access_code": "demo-code"}).status_code == 200
+        assert second_client.post("/api/access/session", json={"access_code": "demo-code"}).status_code == 200
+
+        created = first_client.post("/api/conversations", json={"title": "first client chat"})
+        first_list = first_client.get("/api/conversations")
+        second_list = second_client.get("/api/conversations")
+
+    assert created.status_code == 201
+    assert len(first_list.json()["conversations"]) == 1
+    assert second_list.json()["conversations"] == []
+
+
+def test_demo_can_disable_key_management(monkeypatch):
+    monkeypatch.setattr(api_module.settings, "access_token", None)
+    monkeypatch.setattr(api_module.settings, "allow_key_management", False)
+
+    with TestClient(api_module.app) as client:
+        provider_response = client.post("/api/keys", json={"provider": "tinker", "api_key": "demo-key"})
+        search_response = client.post("/api/search-key", json={"api_key": "demo-search-key"})
+
+    assert provider_response.status_code == 403
+    assert search_response.status_code == 403
+
+
 class FakeProvider:
     async def generate(self, request):
         system = "\n".join(message.content for message in request.messages if message.role == "system")

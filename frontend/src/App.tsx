@@ -1,11 +1,14 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ApiError,
   createConversation,
+  createAccessSession,
   deleteConversation,
   deleteKey,
   deleteSearchKey,
   fetchSourceUrl,
+  getAccessStatus,
   getConversation,
   getConversations,
   getKeys,
@@ -83,10 +86,16 @@ function App() {
   const [streamGraph, setStreamGraph] = useState<ReliabilityGraph | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [accessRequired, setAccessRequired] = useState(false);
+  const [accessAuthenticated, setAccessAuthenticated] = useState(true);
+  const [publicDemo, setPublicDemo] = useState(false);
+  const [keyManagementEnabled, setKeyManagementEnabled] = useState(true);
+  const [accessCode, setAccessCode] = useState("");
+  const [accessBusy, setAccessBusy] = useState(false);
   const submitLockRef = useRef(false);
 
   useEffect(() => {
-    void refreshWorkspace().catch(showError);
+    void bootstrapWorkspace().catch(showError);
   }, []);
 
   useEffect(() => {
@@ -102,6 +111,17 @@ function App() {
   const verifierReady = Boolean(verifierStatus?.ready);
   const chatReady = providerReady && verifierReady;
   const progress = events.length === 0 ? 0 : events[events.length - 1].progress ?? 0;
+
+  async function bootstrapWorkspace() {
+    const access = await getAccessStatus();
+    setAccessRequired(access.access_required);
+    setAccessAuthenticated(access.authenticated);
+    setPublicDemo(access.public_demo);
+    setKeyManagementEnabled(access.key_management_enabled);
+    if (!access.access_required || access.authenticated) {
+      await refreshWorkspace();
+    }
+  }
 
   async function refreshWorkspace() {
     const [nextProviders, nextKeys, nextPreference, nextSearchPreference, nextVerifierStatus, nextConversations] = await Promise.all([
@@ -382,7 +402,34 @@ function App() {
   }
 
   function showError(err: unknown) {
+    if (err instanceof ApiError && err.status === 401) {
+      setAccessRequired(true);
+      setAccessAuthenticated(false);
+      setError(null);
+      return;
+    }
     setError(err instanceof Error ? err.message : "Something went wrong");
+  }
+
+  async function handleAccessSubmit(event: FormEvent) {
+    event.preventDefault();
+    const code = accessCode.trim();
+    if (!code || accessBusy) return;
+    setAccessBusy(true);
+    setError(null);
+    try {
+      const access = await createAccessSession(code);
+      setAccessRequired(access.access_required);
+      setAccessAuthenticated(access.authenticated);
+      setPublicDemo(access.public_demo);
+      setKeyManagementEnabled(access.key_management_enabled);
+      setAccessCode("");
+      await refreshWorkspace();
+    } catch (err) {
+      showError(err);
+    } finally {
+      setAccessBusy(false);
+    }
   }
 
   function clearActiveConversation() {
@@ -400,6 +447,19 @@ function App() {
   function handleDraftChange(value: string) {
     setDraft(value);
     if (error) setError(null);
+  }
+
+  if (accessRequired && !accessAuthenticated) {
+    return (
+      <AccessGate
+        accessCode={accessCode}
+        busy={accessBusy}
+        error={error}
+        publicDemo={publicDemo}
+        setAccessCode={setAccessCode}
+        onSubmit={handleAccessSubmit}
+      />
+    );
   }
 
   return (
@@ -441,6 +501,7 @@ function App() {
             onSaveSearchKey={handleSaveSearchKey}
             onDeleteSearchKey={handleDeleteSearchKey}
             onSaveSearchPreference={handleSaveSearchPreference}
+            keyManagementEnabled={keyManagementEnabled}
           />
         ) : view === "about" ? (
           <AboutView />
@@ -475,6 +536,54 @@ function App() {
 function isMissingConversationError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.message.includes("Not Found") || err.message.includes('"detail"');
+}
+
+function AccessGate({
+  accessCode,
+  busy,
+  error,
+  publicDemo,
+  setAccessCode,
+  onSubmit,
+}: {
+  accessCode: string;
+  busy: boolean;
+  error: string | null;
+  publicDemo: boolean;
+  setAccessCode: (value: string) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <main className="access-shell">
+      <section className="access-card">
+        <div className="brand-block">
+          <div className="brand-mark" aria-hidden="true">RG</div>
+          <strong>ReliabilityGraph</strong>
+        </div>
+        <h1>Enter access code</h1>
+        <p>
+          {publicDemo
+            ? "This demo uses shared server-side model and search keys, so access is limited."
+            : "This deployment requires an access code before loading the workspace."}
+        </p>
+        <form onSubmit={onSubmit}>
+          <input
+            autoFocus
+            aria-label="Access code"
+            autoComplete="current-password"
+            placeholder="Access code"
+            type="password"
+            value={accessCode}
+            onChange={(event) => setAccessCode(event.target.value)}
+          />
+          <button disabled={busy || accessCode.trim().length === 0} type="submit">
+            {busy ? "Checking" : "Continue"}
+          </button>
+        </form>
+        {error && <p className="access-error" role="alert">{error}</p>}
+      </section>
+    </main>
+  );
 }
 
 function ChatView({
@@ -689,6 +798,7 @@ function SettingsView(props: {
   onSaveSearchKey: (event: FormEvent) => void;
   onDeleteSearchKey: () => void;
   onSaveSearchPreference: (payload: { max_results: number }) => void;
+  keyManagementEnabled: boolean;
 }) {
   return (
     <div className="settings-page">
@@ -706,6 +816,7 @@ function SettingsView(props: {
           setKeyValue={props.setKeyValue}
           onSave={props.onSaveKey}
           onDelete={props.onDeleteKey}
+          enabled={props.keyManagementEnabled}
         />
         <ProviderSettings
           providers={props.providers}
@@ -720,6 +831,7 @@ function SettingsView(props: {
           onSaveKey={props.onSaveSearchKey}
           onDeleteKey={props.onDeleteSearchKey}
           onSavePreference={props.onSaveSearchPreference}
+          keyManagementEnabled={props.keyManagementEnabled}
         />
         <section className="settings-panel">
           <div className="section-heading">

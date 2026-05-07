@@ -8,6 +8,10 @@ RUN_PROVIDERS = KEY_PROVIDERS
 SEARCH_MODES = ["auto", "always", "off"]
 
 
+class AccessSessionCreate(BaseModel):
+    access_code: str = Field(min_length=1, max_length=500)
+
+
 class ProviderKeyCreate(BaseModel):
     provider: str
     api_key: str = Field(min_length=4, max_length=5000)

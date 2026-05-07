@@ -1,11 +1,14 @@
 import asyncio
+import hmac
 import hashlib
 import json
 import os
 import re
+import secrets
+import time
 from typing import Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -15,6 +18,7 @@ from .pipeline import PipelineStageError, ReliabilityPipeline
 from .providers import list_provider_metadata
 from .retrieval import build_chunks, fetch_url_text, search_chunks
 from .schemas import (
+    AccessSessionCreate,
     ConversationCreate,
     ConversationMessageCreate,
     DocumentCreate,
@@ -44,10 +48,35 @@ app.add_middleware(
 storage = Storage(settings.db_path)
 vault = KeyVault(settings.db_path.parent, settings.secret)
 entailment_verifier = build_entailment_verifier()
+ACCESS_COOKIE_NAME = "rg_access"
+_rate_limit_buckets: Dict[str, List[float]] = {}
+
+
+@app.middleware("http")
+async def demo_access_guard(request: Request, call_next):
+    if request.method == "OPTIONS" or _is_public_path(request.url.path):
+        return await call_next(request)
+    if not settings.access_token:
+        return await call_next(request)
+    if not _request_is_authenticated(request):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": {"code": "access_required", "message": "Enter the demo access code to continue."}},
+        )
+    if not _rate_limit_allows(request):
+        return JSONResponse(
+            status_code=429,
+            content={"detail": {"code": "rate_limited", "message": "Demo request limit reached. Try again later."}},
+        )
+    return await call_next(request)
 
 
 @app.on_event("startup")
 def startup() -> None:
+    if settings.public_demo and not settings.access_token:
+        raise RuntimeError("RELIABILITY_GRAPH_PUBLIC_DEMO requires RELIABILITY_GRAPH_ACCESS_TOKEN.")
+    if settings.public_demo and not settings.secret:
+        raise RuntimeError("RELIABILITY_GRAPH_PUBLIC_DEMO requires RELIABILITY_GRAPH_SECRET.")
     storage.init_db()
 
 
@@ -60,13 +89,55 @@ def health():
         "version": "0.1.0",
         "db_path": str(settings.db_path),
         "user_scope": settings.user_id,
+        "public_demo": settings.public_demo,
+        "access_required": bool(settings.access_token),
         "verifier": verifier,
     }
 
 
+@app.get("/api/access/status")
+def access_status(request: Request):
+    return {
+        "access_required": bool(settings.access_token),
+        "authenticated": (not settings.access_token) or _request_is_authenticated(request),
+        "public_demo": settings.public_demo,
+        "key_management_enabled": settings.allow_key_management,
+    }
+
+
+@app.post("/api/access/session")
+def create_access_session(payload: AccessSessionCreate, request: Request, response: Response):
+    if not settings.access_token:
+        return {"authenticated": True, "access_required": False}
+    if not _rate_limit_allows(request):
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "rate_limited", "message": "Demo request limit reached. Try again later."},
+        )
+    if not hmac.compare_digest(payload.access_code, settings.access_token):
+        raise HTTPException(status_code=401, detail={"code": "invalid_access_code", "message": "Access code is incorrect."})
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        _new_session_cookie_value(),
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="none" if settings.cookie_secure else "lax",
+        max_age=60 * 60 * 24 * 7,
+        path="/",
+    )
+    _rate_limit_buckets.pop(_rate_limit_key(request), None)
+    return {
+        "authenticated": True,
+        "access_required": True,
+        "public_demo": settings.public_demo,
+        "key_management_enabled": settings.allow_key_management,
+    }
+
+
 @app.get("/api/providers")
-def providers():
-    saved = [row["provider"] for row in storage.list_provider_keys(settings.user_id)]
+def providers(request: Request):
+    user_id = _request_user_id(request)
+    saved = [row["provider"] for row in storage.list_provider_keys(user_id)]
     env_keys = [provider for provider, env_var in ENV_KEY_BY_PROVIDER.items() if os.getenv(env_var)]
     return {"providers": list_provider_metadata(saved, env_keys)}
 
@@ -77,124 +148,144 @@ def verifier_status():
 
 
 @app.get("/api/provider-preferences")
-def get_provider_preferences():
-    preference = storage.get_provider_preference(settings.user_id)
-    return {"preference": preference, "resolved": _resolve_provider_defaults(None, strict=False)}
+def get_provider_preferences(request: Request):
+    user_id = _request_user_id(request)
+    preference = storage.get_provider_preference(user_id)
+    return {"preference": preference, "resolved": _resolve_provider_defaults(user_id, None, strict=False)}
 
 
 @app.put("/api/provider-preferences")
-def save_provider_preferences(payload: ProviderPreferenceUpdate):
-    if payload.provider and payload.provider not in _connected_providers():
+def save_provider_preferences(payload: ProviderPreferenceUpdate, request: Request):
+    user_id = _request_user_id(request)
+    if payload.provider and payload.provider not in _connected_providers(user_id):
         raise HTTPException(status_code=400, detail="provider is not connected")
     preference = storage.save_provider_preference(
-        settings.user_id,
+        user_id,
         payload.provider,
         payload.model.strip() if payload.model else None,
         payload.samples,
         payload.max_cost_usd,
     )
-    return {"preference": preference, "resolved": _resolve_provider_defaults(None, strict=False)}
+    return {"preference": preference, "resolved": _resolve_provider_defaults(user_id, None, strict=False)}
 
 
 @app.get("/api/search-preferences")
-def get_search_preferences():
+def get_search_preferences(request: Request):
+    user_id = _request_user_id(request)
     return {
-        "preference": storage.get_search_preference(settings.user_id),
-        "key": _search_key_view(),
+        "preference": storage.get_search_preference(user_id),
+        "key": _search_key_view(user_id),
     }
 
 
 @app.put("/api/search-preferences")
-def save_search_preferences(payload: SearchPreferenceUpdate):
+def save_search_preferences(payload: SearchPreferenceUpdate, request: Request):
+    user_id = _request_user_id(request)
     return {
-        "preference": storage.save_search_preference(settings.user_id, payload.search_mode, payload.max_results),
-        "key": _search_key_view(),
+        "preference": storage.save_search_preference(user_id, payload.search_mode, payload.max_results),
+        "key": _search_key_view(user_id),
     }
 
 
 @app.post("/api/search-key", status_code=201)
-def save_search_key(payload: SearchKeyCreate):
+def save_search_key(payload: SearchKeyCreate, request: Request):
+    user_id = _request_user_id(request)
+    _require_key_management_allowed()
     ciphertext = vault.encrypt(payload.api_key)
     fingerprint = vault.fingerprint(payload.api_key)
-    storage.save_search_key(settings.user_id, "tavily", ciphertext, fingerprint)
-    return _search_key_view()
+    storage.save_search_key(user_id, "tavily", ciphertext, fingerprint)
+    return _search_key_view(user_id)
 
 
 @app.delete("/api/search-key")
-def delete_search_key():
-    deleted = storage.delete_search_key(settings.user_id, "tavily")
+def delete_search_key(request: Request):
+    user_id = _request_user_id(request)
+    _require_key_management_allowed()
+    deleted = storage.delete_search_key(user_id, "tavily")
     if not deleted:
         raise HTTPException(status_code=404, detail="search key not found")
     return {"deleted": True}
 
 
 @app.get("/api/keys")
-def list_keys():
-    return {"keys": storage.list_provider_keys(settings.user_id)}
+def list_keys(request: Request):
+    user_id = _request_user_id(request)
+    return {"keys": storage.list_provider_keys(user_id)}
 
 
 @app.post("/api/keys", status_code=201)
-def save_key(payload: ProviderKeyCreate):
+def save_key(payload: ProviderKeyCreate, request: Request):
+    user_id = _request_user_id(request)
+    _require_key_management_allowed()
     ciphertext = vault.encrypt(payload.api_key)
     fingerprint = vault.fingerprint(payload.api_key)
-    return storage.save_provider_key(settings.user_id, payload.provider, ciphertext, fingerprint)
+    return storage.save_provider_key(user_id, payload.provider, ciphertext, fingerprint)
 
 
 @app.delete("/api/keys/{provider}")
-def delete_key(provider: str):
-    deleted = storage.delete_provider_key(settings.user_id, provider.lower())
+def delete_key(provider: str, request: Request):
+    user_id = _request_user_id(request)
+    _require_key_management_allowed()
+    deleted = storage.delete_provider_key(user_id, provider.lower())
     if not deleted:
         raise HTTPException(status_code=404, detail="provider key not found")
     return {"deleted": True}
 
 
 @app.post("/api/runs", status_code=201)
-def create_run(payload: RunCreate):
+def create_run(payload: RunCreate, request: Request):
+    user_id = _request_user_id(request)
     storage.init_db()
-    payload = _run_with_provider_defaults(payload)
+    payload = _run_with_provider_defaults(user_id, payload)
     _require_verifier_ready()
-    return storage.create_run(settings.user_id, payload)
+    return storage.create_run(user_id, payload)
 
 
 @app.get("/api/runs")
-def list_runs():
-    return {"runs": storage.list_runs(settings.user_id)}
+def list_runs(request: Request):
+    user_id = _request_user_id(request)
+    return {"runs": storage.list_runs(user_id)}
 
 
 @app.get("/api/conversations")
-def list_conversations():
-    return {"conversations": storage.list_conversations(settings.user_id)}
+def list_conversations(request: Request):
+    user_id = _request_user_id(request)
+    return {"conversations": storage.list_conversations(user_id)}
 
 
 @app.post("/api/conversations", status_code=201)
-def create_conversation(payload: ConversationCreate):
-    return storage.create_conversation(settings.user_id, payload.title)
+def create_conversation(payload: ConversationCreate, request: Request):
+    user_id = _request_user_id(request)
+    return storage.create_conversation(user_id, payload.title)
 
 
 @app.get("/api/conversations/{conversation_id}")
-def get_conversation(conversation_id: str):
+def get_conversation(conversation_id: str, request: Request):
+    user_id = _request_user_id(request)
     try:
-        return storage.get_conversation(settings.user_id, conversation_id)
+        return storage.get_conversation(user_id, conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="conversation not found") from exc
 
 
 @app.delete("/api/conversations/{conversation_id}")
-def delete_conversation(conversation_id: str):
-    if not storage.delete_conversation(settings.user_id, conversation_id):
+def delete_conversation(conversation_id: str, request: Request):
+    user_id = _request_user_id(request)
+    if not storage.delete_conversation(user_id, conversation_id):
         raise HTTPException(status_code=404, detail="conversation not found")
     return {"deleted": True}
 
 
 @app.post("/api/conversations/{conversation_id}/messages", status_code=201)
-def create_conversation_message(conversation_id: str, payload: ConversationMessageCreate):
+def create_conversation_message(conversation_id: str, payload: ConversationMessageCreate, request: Request):
+    user_id = _request_user_id(request)
     try:
-        conversation = storage.get_conversation(settings.user_id, conversation_id)
+        conversation = storage.get_conversation(user_id, conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="conversation not found") from exc
 
-    attachment_document_ids = _validate_attachment_document_ids(payload.attachment_document_ids)
-    _resolve_provider_defaults(payload.provider)
+    attachment_document_ids = _validate_attachment_document_ids(user_id, payload.attachment_document_ids)
+    _resolve_provider_defaults(user_id, payload.provider)
     _require_verifier_ready()
     prior_context = [
         {"role": message["role"], "content": message["content"][:1800]}
@@ -202,24 +293,25 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
         if message["role"] in {"user", "assistant"}
     ]
     user_message = storage.add_message(
-        settings.user_id,
+        user_id,
         conversation_id,
         "user",
         payload.content.strip(),
         attachment_document_ids=attachment_document_ids,
     )
     if len(conversation["messages"]) == 0:
-        storage.update_conversation_title(settings.user_id, conversation_id, _conversation_title(payload.content))
+        storage.update_conversation_title(user_id, conversation_id, _conversation_title(payload.content))
 
     run_payload = _run_with_provider_defaults(
+        user_id,
         RunCreate(
             question=payload.content.strip(),
             provider=payload.provider,
             model=payload.model,
-            samples=payload.samples or storage.get_provider_preference(settings.user_id)["samples"],
+            samples=payload.samples or storage.get_provider_preference(user_id)["samples"],
             max_cost_usd=payload.max_cost_usd
             if payload.max_cost_usd is not None
-            else storage.get_provider_preference(settings.user_id)["max_cost_usd"],
+            else storage.get_provider_preference(user_id)["max_cost_usd"],
             use_live_provider=True,
             conversation_id=conversation_id,
             user_message_id=user_message["message_id"],
@@ -228,28 +320,31 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
             search_mode="always",
         )
     )
-    run = storage.create_run(settings.user_id, run_payload)
+    run = storage.create_run(user_id, run_payload)
     return {"message": user_message, "run": run}
 
 
 @app.get("/api/runs/{run_id}")
-def get_run(run_id: str):
+def get_run(run_id: str, request: Request):
+    user_id = _request_user_id(request)
     try:
-        return storage.get_run(settings.user_id, run_id)
+        return storage.get_run(user_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
 
 
 @app.delete("/api/runs/{run_id}")
-def delete_run(run_id: str):
-    if not storage.delete_run(settings.user_id, run_id):
+def delete_run(run_id: str, request: Request):
+    user_id = _request_user_id(request)
+    if not storage.delete_run(user_id, run_id):
         raise HTTPException(status_code=404, detail="run not found")
     return {"deleted": True}
 
 
 @app.get("/api/runs/{run_id}/export")
-def export_run(run_id: str):
-    run = _get_run_or_404(run_id)
+def export_run(run_id: str, request: Request):
+    user_id = _request_user_id(request)
+    run = _get_run_or_404(user_id, run_id)
     graph = run.get("graph")
     if not graph:
         raise HTTPException(status_code=409, detail="run is not completed")
@@ -260,10 +355,11 @@ def export_run(run_id: str):
 
 
 @app.post("/api/runs/{run_id}/label", status_code=201)
-def label_run(run_id: str, payload: RunLabelCreate):
+def label_run(run_id: str, payload: RunLabelCreate, request: Request):
+    user_id = _request_user_id(request)
     try:
         return storage.save_label(
-            settings.user_id,
+            user_id,
             run_id,
             payload.usefulness,
             payload.correctness,
@@ -274,21 +370,23 @@ def label_run(run_id: str, payload: RunLabelCreate):
 
 
 @app.get("/api/documents")
-def list_documents():
-    return {"documents": storage.list_documents(settings.user_id)}
+def list_documents(request: Request):
+    user_id = _request_user_id(request)
+    return {"documents": storage.list_documents(user_id)}
 
 
 @app.post("/api/documents", status_code=201)
-def save_document(payload: DocumentCreate):
+def save_document(payload: DocumentCreate, request: Request):
+    user_id = _request_user_id(request)
     content_sha = hashlib.sha256(payload.text.encode("utf-8")).hexdigest()
-    existing = storage.find_document_by_signature(settings.user_id, content_sha, payload.source_url)
+    existing = storage.find_document_by_signature(user_id, content_sha, payload.source_url)
     if existing:
         return existing
     chunks = build_chunks(payload.text)
     if not chunks:
         raise HTTPException(status_code=400, detail="document did not contain indexable text")
     return storage.save_document(
-        settings.user_id,
+        user_id,
         payload.title.strip(),
         payload.text,
         payload.source_url,
@@ -298,20 +396,21 @@ def save_document(payload: DocumentCreate):
 
 
 @app.post("/api/documents/fetch", status_code=201)
-def fetch_document(payload: SourceFetchCreate):
+def fetch_document(payload: SourceFetchCreate, request: Request):
+    user_id = _request_user_id(request)
     try:
         fetched = fetch_url_text(payload.url)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=_sanitize_error(str(exc))) from exc
     content_sha = hashlib.sha256(fetched["text"].encode("utf-8")).hexdigest()
-    existing = storage.find_document_by_signature(settings.user_id, content_sha, fetched["source_url"])
+    existing = storage.find_document_by_signature(user_id, content_sha, fetched["source_url"])
     if existing:
         return existing
     chunks = build_chunks(fetched["text"])
     if not chunks:
         raise HTTPException(status_code=400, detail="source did not contain indexable text")
     return storage.save_document(
-        settings.user_id,
+        user_id,
         fetched["title"][:300],
         fetched["text"],
         fetched["source_url"],
@@ -321,32 +420,35 @@ def fetch_document(payload: SourceFetchCreate):
 
 
 @app.get("/api/documents/search")
-def search_documents(q: str = Query(min_length=1, max_length=1000), limit: int = Query(default=8, ge=1, le=30)):
-    return {"matches": search_chunks(q, storage.list_document_chunks(settings.user_id), limit=limit)}
+def search_documents(request: Request, q: str = Query(min_length=1, max_length=1000), limit: int = Query(default=8, ge=1, le=30)):
+    user_id = _request_user_id(request)
+    return {"matches": search_chunks(q, storage.list_document_chunks(user_id), limit=limit)}
 
 
 @app.get("/api/benchmarks/report")
-def benchmark_report():
-    return build_benchmark_report(storage.list_labeled_runs(settings.user_id))
+def benchmark_report(request: Request):
+    user_id = _request_user_id(request)
+    return build_benchmark_report(storage.list_labeled_runs(user_id))
 
 
 @app.get("/api/runs/{run_id}/events")
-async def stream_run_events(run_id: str):
-    initial_run = _get_run_or_404(run_id)
+async def stream_run_events(run_id: str, request: Request):
+    user_id = _request_user_id(request)
+    initial_run = _get_run_or_404(user_id, run_id)
 
     async def resolve_key(provider: str) -> Optional[str]:
-        ciphertext = storage.get_provider_key_ciphertext(settings.user_id, provider)
+        ciphertext = storage.get_provider_key_ciphertext(user_id, provider)
         if ciphertext:
-            storage.mark_provider_key_used(settings.user_id, provider)
+            storage.mark_provider_key_used(user_id, provider)
             return vault.decrypt(ciphertext)
         env_var = ENV_KEY_BY_PROVIDER.get(provider)
         return os.getenv(env_var) if env_var else None
 
     async def generate():
         if initial_run["status"] == "completed" and initial_run.get("graph"):
-            if initial_run.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+            if initial_run.get("conversation_id") and not storage.assistant_message_exists_for_run(user_id, run_id):
                 storage.add_message(
-                    settings.user_id,
+                    user_id,
                     initial_run["conversation_id"],
                     "assistant",
                     initial_run["graph"]["answer"]["final_answer"],
@@ -355,9 +457,9 @@ async def stream_run_events(run_id: str):
             yield _sse({"type": "completed", "progress": 1.0, "message": "Run already completed", "graph": initial_run["graph"]})
             return
 
-        storage.set_run_status(settings.user_id, run_id, "running")
+        storage.set_run_status(user_id, run_id, "running")
         attachment_document_ids = initial_run.get("attachment_document_ids", [])
-        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(initial_run, attachment_document_ids)
+        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(user_id, initial_run, attachment_document_ids)
         for index, span in enumerate(pre_trace, start=1):
             yield _sse({"type": "progress", "span": span, "progress": min(0.08, index * 0.04), "message": span["input_summary"]})
         run_context = {
@@ -368,8 +470,8 @@ async def stream_run_events(run_id: str):
             "search_used": any(call.get("result_count", 0) > 0 for call in web_search.get("calls", [])),
         }
         pipeline = ReliabilityPipeline(
-            retrieval_chunks=storage.list_document_chunks(settings.user_id, retrieval_document_ids),
-            calibration_report=build_benchmark_report(storage.list_labeled_runs(settings.user_id)),
+            retrieval_chunks=storage.list_document_chunks(user_id, retrieval_document_ids),
+            calibration_report=build_benchmark_report(storage.list_labeled_runs(user_id)),
             entailment_verifier=entailment_verifier,
         )
         trace = list(pre_trace)
@@ -380,10 +482,10 @@ async def stream_run_events(run_id: str):
                 if event["type"] == "completed":
                     trace = pre_trace + event["trace"]
                     event["graph"]["trace"] = trace
-                    storage.complete_run(settings.user_id, run_id, event["graph"], trace)
-                    if run_context.get("conversation_id") and not storage.assistant_message_exists_for_run(settings.user_id, run_id):
+                    storage.complete_run(user_id, run_id, event["graph"], trace)
+                    if run_context.get("conversation_id") and not storage.assistant_message_exists_for_run(user_id, run_id):
                         storage.add_message(
-                            settings.user_id,
+                            user_id,
                             run_context["conversation_id"],
                             "assistant",
                             event["graph"]["answer"]["final_answer"],
@@ -392,18 +494,18 @@ async def stream_run_events(run_id: str):
                 yield _sse(event)
         except PipelineStageError as exc:
             message = _sanitize_error(exc.message)
-            storage.fail_run(settings.user_id, run_id, message, trace)
+            storage.fail_run(user_id, run_id, message, trace)
             yield _sse({**exc.to_event(), "message": message})
         except Exception as exc:
             message = _sanitize_error(str(exc))
-            storage.fail_run(settings.user_id, run_id, message, trace)
+            storage.fail_run(user_id, run_id, message, trace)
             yield _sse({"type": "error", "code": "unexpected_error", "stage": "runtime", "retryable": True, "message": message})
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document_ids: List[str]):
-    preference = storage.get_search_preference(settings.user_id)
+async def _prepare_retrieval_for_run(user_id: str, run: Dict[str, object], attachment_document_ids: List[str]):
+    preference = storage.get_search_preference(user_id)
     search_mode = "always" if run.get("use_live_provider", True) else (run.get("search_mode") or preference["search_mode"])
     route = choose_research_route(
         run["question"],
@@ -426,7 +528,7 @@ async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document
     if route.route not in {"web_search", "hybrid"}:
         return pre_trace, retrieval_document_ids, web_search
 
-    api_key = _resolve_search_key()
+    api_key = _resolve_search_key(user_id)
     if not api_key:
         call = {
             "query": route.query,
@@ -453,7 +555,7 @@ async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document
             None,
             lambda: search_tavily(api_key, route.query or run["question"], preference["max_results"], route.recency),
         )
-        documents = _index_web_search_results(result["results"])
+        documents = _index_web_search_results(user_id, result["results"])
         retrieval_document_ids.extend([document["document_id"] for document in documents])
         call = {
             "query": result["query"],
@@ -499,7 +601,7 @@ async def _prepare_retrieval_for_run(run: Dict[str, object], attachment_document
     return pre_trace, retrieval_document_ids, web_search
 
 
-def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str, object]]:
+def _index_web_search_results(user_id: str, results: List[Dict[str, object]]) -> List[Dict[str, object]]:
     documents = []
     for result in results:
         content = result["content"]
@@ -507,7 +609,7 @@ def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str
         if published_date:
             content = "Published date: %s\n\n%s" % (published_date[:80], content)
         content_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        existing = storage.find_document_by_signature(settings.user_id, content_sha, result["url"])
+        existing = storage.find_document_by_signature(user_id, content_sha, result["url"])
         if existing:
             documents.append(existing)
             continue
@@ -516,7 +618,7 @@ def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str
             continue
         documents.append(
             storage.save_document(
-                settings.user_id,
+                user_id,
                 result["title"],
                 content,
                 result["url"],
@@ -527,22 +629,22 @@ def _index_web_search_results(results: List[Dict[str, object]]) -> List[Dict[str
     return documents
 
 
-def _get_run_or_404(run_id: str):
+def _get_run_or_404(user_id: str, run_id: str):
     try:
-        return storage.get_run(settings.user_id, run_id)
+        return storage.get_run(user_id, run_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="run not found") from exc
 
 
-def _connected_providers():
-    saved = [row["provider"] for row in storage.list_provider_keys(settings.user_id)]
+def _connected_providers(user_id: str):
+    saved = [row["provider"] for row in storage.list_provider_keys(user_id)]
     env_keys = [provider for provider, env_var in ENV_KEY_BY_PROVIDER.items() if os.getenv(env_var)]
     return sorted(set(saved + env_keys))
 
 
-def _search_key_view():
+def _search_key_view(user_id: str):
     try:
-        saved = storage.get_search_key_view(settings.user_id, "tavily")
+        saved = storage.get_search_key_view(user_id, "tavily")
         return {**saved, "key_state": "saved", "key_env_var": ENV_KEY_BY_SEARCH_PROVIDER["tavily"]}
     except KeyError:
         if os.getenv(ENV_KEY_BY_SEARCH_PROVIDER["tavily"]):
@@ -566,17 +668,17 @@ def _search_key_view():
         }
 
 
-def _resolve_search_key() -> Optional[str]:
-    ciphertext = storage.get_search_key_ciphertext(settings.user_id, "tavily")
+def _resolve_search_key(user_id: str) -> Optional[str]:
+    ciphertext = storage.get_search_key_ciphertext(user_id, "tavily")
     if ciphertext:
-        storage.mark_search_key_used(settings.user_id, "tavily")
+        storage.mark_search_key_used(user_id, "tavily")
         return vault.decrypt(ciphertext)
     return os.getenv(ENV_KEY_BY_SEARCH_PROVIDER["tavily"])
 
 
-def _resolve_provider_defaults(provider: Optional[str], strict: bool = True):
-    connected = _connected_providers()
-    preference = storage.get_provider_preference(settings.user_id)
+def _resolve_provider_defaults(user_id: str, provider: Optional[str], strict: bool = True):
+    connected = _connected_providers(user_id)
+    preference = storage.get_provider_preference(user_id)
     selected = provider or preference.get("provider")
     if selected:
         if selected not in connected:
@@ -605,9 +707,9 @@ def _resolve_provider_defaults(provider: Optional[str], strict: bool = True):
     raise HTTPException(status_code=400, detail="choose a default provider in Settings")
 
 
-def _run_with_provider_defaults(payload: RunCreate) -> RunCreate:
-    defaults = _resolve_provider_defaults(payload.provider)
-    preference = storage.get_provider_preference(settings.user_id)
+def _run_with_provider_defaults(user_id: str, payload: RunCreate) -> RunCreate:
+    defaults = _resolve_provider_defaults(user_id, payload.provider)
+    preference = storage.get_provider_preference(user_id)
     return payload.model_copy(
         update={
             "provider": defaults["provider"],
@@ -633,10 +735,10 @@ def _require_verifier_ready() -> None:
         )
 
 
-def _validate_attachment_document_ids(document_ids):
+def _validate_attachment_document_ids(user_id: str, document_ids):
     if not document_ids:
         return []
-    available = {document["document_id"] for document in storage.list_documents(settings.user_id)}
+    available = {document["document_id"] for document in storage.list_documents(user_id)}
     missing = [document_id for document_id in document_ids if document_id not in available]
     if missing:
         raise HTTPException(status_code=400, detail="attachment document not found")
@@ -646,6 +748,90 @@ def _validate_attachment_document_ids(document_ids):
 def _conversation_title(content: str) -> str:
     title = " ".join(content.strip().split())
     return title[:56] + ("..." if len(title) > 56 else "")
+
+
+def _is_public_path(path: str) -> bool:
+    return path in {"/health", "/api/access/status", "/api/access/session"} or path.startswith("/docs") or path.startswith("/openapi.json")
+
+
+def _request_is_authenticated(request: Request) -> bool:
+    token = request.headers.get("x-rg-access-token") or _bearer_token(request.headers.get("authorization"))
+    if token and settings.access_token and hmac.compare_digest(token, settings.access_token):
+        return True
+    return _session_id_from_cookie(request.cookies.get(ACCESS_COOKIE_NAME)) is not None
+
+
+def _request_user_id(request: Request) -> str:
+    if settings.public_demo and settings.access_token:
+        session_id = _session_id_from_cookie(request.cookies.get(ACCESS_COOKIE_NAME))
+        if session_id:
+            digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:20]
+            return "demo:%s" % digest
+        token = request.headers.get("x-rg-access-token") or _bearer_token(request.headers.get("authorization"))
+        if token and hmac.compare_digest(token, settings.access_token):
+            return "demo:api"
+    return settings.user_id
+
+
+def _bearer_token(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return token.strip()
+
+
+def _new_session_cookie_value() -> str:
+    session_id = secrets.token_urlsafe(24)
+    return "v1.%s.%s" % (session_id, _session_signature(session_id))
+
+
+def _session_id_from_cookie(cookie: Optional[str]) -> Optional[str]:
+    if not cookie:
+        return None
+    prefix, _, rest = cookie.partition(".")
+    session_id, _, signature = rest.partition(".")
+    if prefix != "v1" or not session_id or not signature:
+        return None
+    expected = _session_signature(session_id)
+    return session_id if hmac.compare_digest(signature, expected) else None
+
+
+def _session_signature(session_id: str) -> str:
+    secret = (settings.secret or settings.access_token or "local-demo").encode("utf-8")
+    message = ("reliability-graph-demo-session:%s" % session_id).encode("utf-8")
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+def _rate_limit_allows(request: Request) -> bool:
+    if settings.rate_limit_requests <= 0:
+        return True
+    now = time.time()
+    window_start = now - max(1, settings.rate_limit_window_seconds)
+    key = _rate_limit_key(request)
+    bucket = [timestamp for timestamp in _rate_limit_buckets.get(key, []) if timestamp >= window_start]
+    if len(bucket) >= settings.rate_limit_requests:
+        _rate_limit_buckets[key] = bucket
+        return False
+    bucket.append(now)
+    _rate_limit_buckets[key] = bucket
+    return True
+
+
+def _rate_limit_key(request: Request) -> str:
+    client = request.client.host if request.client else "unknown"
+    cookie = request.cookies.get(ACCESS_COOKIE_NAME) or ""
+    marker = hashlib.sha256(cookie.encode("utf-8")).hexdigest()[:12] if cookie else "no-cookie"
+    return "%s:%s" % (client, marker)
+
+
+def _require_key_management_allowed() -> None:
+    if not settings.allow_key_management:
+        raise HTTPException(
+            status_code=403,
+            detail="Key management is disabled for this demo. Configure provider and search keys as backend environment secrets.",
+        )
 
 
 def _sse(event):

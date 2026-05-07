@@ -265,6 +265,7 @@ interface KeyManagerProps {
   setKeyValue: Dispatch<SetStateAction<string>> | ((value: string) => void);
   onSave: (event: FormEvent) => void;
   onDelete: (provider: string) => void;
+  enabled?: boolean;
 }
 
 export function KeyManager({
@@ -276,6 +277,7 @@ export function KeyManager({
   setKeyValue,
   onSave,
   onDelete,
+  enabled = true,
 }: KeyManagerProps) {
   const keyProviders = providers.filter((provider) => provider.provider !== "local" && provider.provider !== "preview");
   return (
@@ -284,23 +286,27 @@ export function KeyManager({
         <h2>Provider keys</h2>
         <p>Keys stay server-side and appear only as fingerprints.</p>
       </div>
-      <form className="inline-form" onSubmit={onSave}>
-        <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value)}>
-          {keyProviders.map((provider) => (
-            <option key={provider.provider} value={provider.provider}>
-              {provider.label}
-            </option>
-          ))}
-        </select>
-        <input
-          aria-label="Provider API key"
-          placeholder="Paste API key"
-          type="password"
-          value={keyValue}
-          onChange={(event) => setKeyValue(event.target.value)}
-        />
-        <button type="submit">Save</button>
-      </form>
+      {enabled ? (
+        <form className="inline-form" onSubmit={onSave}>
+          <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value)}>
+            {keyProviders.map((provider) => (
+              <option key={provider.provider} value={provider.provider}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+          <input
+            aria-label="Provider API key"
+            placeholder="Paste API key"
+            type="password"
+            value={keyValue}
+            onChange={(event) => setKeyValue(event.target.value)}
+          />
+          <button type="submit">Save</button>
+        </form>
+      ) : (
+        <p className="panel-note">Provider keys are configured as backend secrets for this demo.</p>
+      )}
       <div className="key-list">
         {keys.length === 0 ? (
           <p className="empty">No provider keys saved.</p>
@@ -311,7 +317,7 @@ export function KeyManager({
                 <strong>{key.provider}</strong>
                 <span>{key.fingerprint}</span>
               </div>
-              <button className="quiet-button" type="button" onClick={() => onDelete(key.provider)}>
+              <button className="quiet-button" disabled={!enabled} type="button" onClick={() => onDelete(key.provider)}>
                 Delete
               </button>
             </div>
@@ -406,6 +412,7 @@ export function SearchSettings({
   onSaveKey,
   onDeleteKey,
   onSavePreference,
+  keyManagementEnabled = true,
 }: {
   preference: SearchPreferenceResponse | null;
   keyValue: string;
@@ -413,6 +420,7 @@ export function SearchSettings({
   onSaveKey: (event: FormEvent) => void;
   onDeleteKey: () => void;
   onSavePreference: (payload: { max_results: number }) => void;
+  keyManagementEnabled?: boolean;
 }) {
   const [maxResults, setMaxResults] = useState(preference?.preference.max_results ?? 6);
   const key = preference?.key;
@@ -427,19 +435,23 @@ export function SearchSettings({
         <h2>Web search</h2>
         <p>Web evidence is gathered automatically when a search key is available. The selected model still writes the answer and ReliabilityGraph audits it.</p>
       </div>
-      <form className="inline-form" onSubmit={onSaveKey}>
-        <select value="tavily" disabled aria-label="Web search provider">
-          <option value="tavily">Tavily</option>
-        </select>
-        <input
-          aria-label="Web search API key"
-          placeholder="Paste search API key"
-          type="password"
-          value={keyValue}
-          onChange={(event) => setKeyValue(event.target.value)}
-        />
-        <button type="submit">Save</button>
-      </form>
+      {keyManagementEnabled ? (
+        <form className="inline-form" onSubmit={onSaveKey}>
+          <select value="tavily" disabled aria-label="Web search provider">
+            <option value="tavily">Tavily</option>
+          </select>
+          <input
+            aria-label="Web search API key"
+            placeholder="Paste search API key"
+            type="password"
+            value={keyValue}
+            onChange={(event) => setKeyValue(event.target.value)}
+          />
+          <button type="submit">Save</button>
+        </form>
+      ) : (
+        <p className="panel-note">Search is configured as a backend secret for this demo.</p>
+      )}
       <div className="key-list">
         <div className="key-row">
           <div>
@@ -447,7 +459,7 @@ export function SearchSettings({
             <span>{key?.key_state === "saved" || key?.key_state === "env" ? key.fingerprint ?? key.key_state : "missing"}</span>
           </div>
           {(key?.key_state === "saved" || key?.key_state === "env") && (
-            <button className="quiet-button" type="button" onClick={onDeleteKey} disabled={key.key_state === "env"}>
+            <button className="quiet-button" type="button" onClick={onDeleteKey} disabled={key.key_state === "env" || !keyManagementEnabled}>
               {key.key_state === "env" ? "Env" : "Delete"}
             </button>
           )}

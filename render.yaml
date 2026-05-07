@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: reliabilitygraph-api
+    runtime: docker
+    plan: free
+    dockerContext: .
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: RELIABILITY_GRAPH_PUBLIC_DEMO
+        value: "true"
+      - key: RELIABILITY_GRAPH_ALLOW_KEY_MANAGEMENT
+        value: "false"
+      - key: RELIABILITY_GRAPH_COOKIE_SECURE
+        value: "true"
+      - key: RELIABILITY_GRAPH_RATE_LIMIT_REQUESTS
+        value: "120"
+      - key: RELIABILITY_GRAPH_RATE_LIMIT_WINDOW_SECONDS
+        value: "3600"
+      - key: RELIABILITY_GRAPH_DB
+        value: /app/data/reliability_graph.sqlite
+      - key: CORS_ORIGINS
+        value: https://pranavdulepet.github.io
+      - key: RELIABILITY_GRAPH_ACCESS_TOKEN
+        sync: false
+      - key: RELIABILITY_GRAPH_SECRET
+        sync: false
+      - key: TINKER_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
+    "build:pages": "vite build --base=/reliability/",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

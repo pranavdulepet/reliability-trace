@@ -114,6 +114,67 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.access-shell {
+  align-items: center;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent-soft) 65%, transparent), transparent 42%),
+    var(--bg);
+  display: grid;
+  min-height: 100vh;
+  padding: 24px;
+}
+
+.access-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  display: grid;
+  gap: 16px;
+  margin: 0 auto;
+  max-width: 440px;
+  padding: 24px;
+  width: min(100%, 440px);
+}
+
+.access-card h1 {
+  font-size: clamp(2rem, 6vw, 3.2rem);
+  letter-spacing: 0;
+  line-height: 0.98;
+  margin: 16px 0 0;
+}
+
+.access-card p {
+  color: var(--muted);
+  font-size: 0.96rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.access-card form {
+  display: grid;
+  gap: 10px;
+}
+
+.access-card input {
+  background: var(--surface-soft);
+  color: var(--text);
+  min-height: var(--control-lg);
+  padding: 0 14px;
+  width: 100%;
+}
+
+.access-card button {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-contrast);
+  min-height: var(--control-lg);
+}
+
+.access-error {
+  color: var(--red) !important;
+}
+
 button,
 input,
 select,

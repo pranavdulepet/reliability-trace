@@ -14,10 +14,23 @@ import type {
   VerifierStatus,
 } from "./types";
 
-export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+export const API_BASE = import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? "http://localhost:8000" : window.location.origin);
+
+export class ApiError extends Error {
+  status: number;
+  code: string | null;
+
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -26,21 +39,45 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(readErrorMessage(text) || response.statusText);
+    const parsed = readError(text);
+    throw new ApiError(parsed.message || response.statusText, response.status, parsed.code);
   }
   return response.json() as Promise<T>;
 }
 
-function readErrorMessage(text: string): string {
-  if (!text.trim()) return "";
+function readError(text: string): { message: string; code: string | null } {
+  if (!text.trim()) return { message: "", code: null };
   try {
     const parsed = JSON.parse(text) as { detail?: string | { message?: string; stage?: string; code?: string } };
-    if (typeof parsed.detail === "string") return parsed.detail;
-    if (parsed.detail?.message && parsed.detail.stage) return `${parsed.detail.stage.replaceAll("_", " ")}: ${parsed.detail.message}`;
-    return parsed.detail?.message ?? parsed.detail?.code ?? text;
+    if (typeof parsed.detail === "string") return { message: parsed.detail, code: null };
+    if (parsed.detail?.message && parsed.detail.stage) {
+      return { message: `${parsed.detail.stage.replaceAll("_", " ")}: ${parsed.detail.message}`, code: parsed.detail.code ?? null };
+    }
+    return { message: parsed.detail?.message ?? parsed.detail?.code ?? text, code: parsed.detail?.code ?? null };
   } catch {
-    return text;
+    return { message: text, code: null };
   }
+}
+
+export async function getAccessStatus(): Promise<{
+  access_required: boolean;
+  authenticated: boolean;
+  public_demo: boolean;
+  key_management_enabled: boolean;
+}> {
+  return request("/api/access/status");
+}
+
+export async function createAccessSession(accessCode: string): Promise<{
+  access_required: boolean;
+  authenticated: boolean;
+  public_demo: boolean;
+  key_management_enabled: boolean;
+}> {
+  return request("/api/access/session", {
+    method: "POST",
+    body: JSON.stringify({ access_code: accessCode }),
+  });
 }
 
 export async function getProviders(): Promise<ProviderMetadata[]> {
@@ -195,5 +232,5 @@ export function exportUrl(runId: string): string {
 }
 
 export function runEventSource(runId: string): EventSource {
-  return new EventSource(`${API_BASE}/api/runs/${runId}/events`);
+  return new EventSource(`${API_BASE}/api/runs/${runId}/events`, { withCredentials: true });
 }
