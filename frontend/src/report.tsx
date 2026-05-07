@@ -19,7 +19,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
     return (
       <section className="report-shell empty-report">
         <h2>Reliability analysis</h2>
-        <p>The full claim, source, disagreement, calibration, and probe report appears after the audit finishes.</p>
+        <p>The evidence check, uncertainty, score explanation, activity, and export appear after the audit finishes.</p>
       </section>
     );
   }
@@ -36,7 +36,7 @@ export function Report({ graph, activeTab, setActiveTab }: ReportProps) {
         <div className="score-block">
           <span>Reliability score</span>
           <strong>{graph.answer.reliability_score} / 100</strong>
-          <small>{calibrationCopy(graph)}</small>
+          <small>{scoreStatus(graph)}</small>
         </div>
       </div>
       <nav className="tab-row" aria-label="Report tabs">
@@ -58,34 +58,6 @@ function renderTab(tab: ReportTab, graph: ReliabilityGraph) {
   if (tab === "Activity") return <ActivityTab graph={graph} />;
   if (tab === "Export") return <ExportTab graph={graph} />;
   return <EvidenceTab graph={graph} />;
-}
-
-function OverviewTab({ graph }: { graph: ReliabilityGraph }) {
-  const meta = answerMeta(graph);
-  const issues = reliabilityIssues(graph).slice(0, 4);
-  return (
-    <div className="overview-layout">
-      <section className="overview-score">
-        <div>
-          <span className={`decision-pill decision-${meta.verdict}`}>{meta.verdictLabel}</span>
-          <strong>{graph.answer.reliability_score}/100</strong>
-          <p>{graph.answer.reliability_explanation || graph.analysis_explanation || reliabilityOneLine(graph)}</p>
-        </div>
-      </section>
-      <section className="overview-grid">
-        <MetricTile label="Sources" value={String(evidenceSourceRows(graph).length)} />
-        <MetricTile label="Claims checked" value={String(supportBreakdown(graph).total)} />
-        <MetricTile label="Claim support" value={formatPercent(graph.features.claim_support_rate)} />
-        <MetricTile label="Sample agreement" value={formatPercent(graph.features.semantic_stability ?? graph.disagreement.semantic_stability)} />
-      </section>
-      <section className="overview-actions">
-        <h3>What to check first</h3>
-        {issues.length === 0 ? <p className="empty-state">No blocking issue was found in the completed audit.</p> : <ul>{issues.map((issue) => <li key={`${issue.title}-${issue.detail}`}><strong>{issue.title}</strong><span>{issue.detail}</span></li>)}</ul>}
-        <h3>Next step</h3>
-        <p>{cleanNextAction(meta.nextAction ?? "", graph)}</p>
-      </section>
-    </div>
-  );
 }
 
 function EvidenceTab({ graph }: { graph: ReliabilityGraph }) {
@@ -251,86 +223,6 @@ function EvidenceSourcesTab({ graph }: { graph: ReliabilityGraph }) {
   );
 }
 
-function ConsistencyTab({ graph }: { graph: ReliabilityGraph }) {
-  const checks = graph.consistency_checks;
-  return (
-    <div className="consistency-panel">
-      <div className="consistency-grid">
-        <MetricTile label="Sample agreement" value={formatPercent(checks?.sample_agreement ?? graph.features.semantic_stability ?? graph.disagreement.semantic_stability)} />
-        <MetricTile label="Meaning groups" value={String((checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).length)} />
-        <MetricTile label="Sample overlap" value={formatPercent(checks?.sample_overlap_stability ?? graph.features.sample_overlap_stability)} />
-        <MetricTile label="Conflict rate" value={formatPercent(checks?.sample_conflict_rate ?? graph.features.sample_conflict_rate)} />
-      </div>
-      {graph.disagreement.accepted_rejected_dissent && <p className="panel-note">{graph.disagreement.accepted_rejected_dissent}</p>}
-      <details className="nested-detail">
-        <summary>Sample meanings</summary>
-        {(checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).length === 0 ? (
-          <p className="empty-state">No candidate sample clusters were recorded.</p>
-        ) : (
-          <div className="compact-stack">
-            {(checks?.semantic_clusters ?? graph.disagreement.semantic_clusters).map((cluster) => (
-              <article key={cluster.cluster_id}>
-                <strong>{cluster.label || cluster.cluster_id}</strong>
-                <span>{cluster.candidate_ids.length} sample{cluster.candidate_ids.length === 1 ? "" : "s"}</span>
-                <p>{cluster.summary}</p>
-              </article>
-            ))}
-          </div>
-        )}
-      </details>
-    </div>
-  );
-}
-
-function RobustnessTab({ graph }: { graph: ReliabilityGraph }) {
-  const probe = graph.perturbation_probe ?? graph.causal_probe;
-  const changed = probe.results.filter((result) => result.answer_changed).length;
-  const unsupportedFlips = probe.results.filter((result) => result.unsupported_flip).length;
-  return (
-    <div className="consistency-panel">
-      <div className="consistency-grid">
-        <MetricTile label="Checks run" value={String(probe.results.length || probe.operations.length || 0)} />
-        <MetricTile label="Answer changed" value={String(changed)} />
-        <MetricTile label="Unsupported flips" value={String(unsupportedFlips)} />
-        <MetricTile label="Mode" value={formatStatus(probe.mode || "not available")} />
-      </div>
-      <p className="panel-note">{probe.reason || "Robustness checks compare observable provider outputs under pressure-style prompt variants."}</p>
-      {probe.results.length === 0 ? (
-        <p className="empty-state">No robustness runs were recorded.</p>
-      ) : (
-        <div className="compact-stack">
-          {probe.results.map((result) => (
-            <article key={result.operation}>
-              <strong>{formatStatus(result.operation)}</strong>
-              <span>
-                {result.answer_changed ? "changed" : "stable"} · similarity {formatNumber(result.similarity_to_baseline)} · unsupported flip{" "}
-                {result.unsupported_flip ? "yes" : "no"}
-              </span>
-              <p>{result.result}</p>
-            </article>
-          ))}
-        </div>
-      )}
-      {graph.stress_tests.length > 0 && (
-        <details className="nested-detail">
-          <summary>Other checks</summary>
-          <div className="compact-stack">
-            {graph.stress_tests.map((test) => (
-              <article key={test.test_type}>
-                <strong>{formatStatus(test.test_type)}</strong>
-                <span>
-                  {test.answer_changed ? "changed" : "stable"} · unsupported flip {test.unsupported_flip ? "yes" : "no"}
-                </span>
-                <p>{test.result}</p>
-              </article>
-            ))}
-          </div>
-        </details>
-      )}
-    </div>
-  );
-}
-
 function ScoreTab({ graph }: { graph: ReliabilityGraph }) {
   const breakdown = scoreBreakdownRows(graph);
   return (
@@ -469,7 +361,7 @@ export function ReliabilityCards({ graph, onUsePrompt }: { graph: ReliabilityGra
           {prompts.map((prompt) => (
             <button key={prompt.prompt} type="button" className="repair-chip" onClick={() => onUsePrompt?.(prompt.prompt)} title={prompt.reason}>
               <strong>{prompt.label}</strong>
-              <small>{prompt.reason}</small>
+              <small>{shortText(prompt.prompt, 150)}</small>
             </button>
           ))}
         </div>
@@ -550,10 +442,6 @@ function ExportTab({ graph }: { graph: ReliabilityGraph }) {
 function formatPercent(value: number | undefined): string {
   if (typeof value !== "number" || Number.isNaN(value)) return "n/a";
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
-
-function formatNumber(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
 
 function formatProvider(provider: string): string {
@@ -769,33 +657,6 @@ function relationExplanation(relation: string): string {
   return "No source snippet was found that supports this claim.";
 }
 
-function calibrationCopy(graph: ReliabilityGraph): string {
-  if (graph.answer.calibration_status === "local_calibration") {
-    const labels = graph.calibration.benchmark?.label_count ?? 0;
-    return labels > 0 ? `Locally calibrated with ${labels} labeled run${labels === 1 ? "" : "s"}` : "Locally calibrated";
-  }
-  if (graph.answer.calibration_status === "benchmark_tuned" || graph.answer.calibration_status === "benchmark_tuned_diagnostic") {
-    return "Benchmark-tuned Reliability Score; use the evidence and final decision with the number";
-  }
-  return "Research-prior Reliability Score; use the evidence and final decision with the number";
-}
-
-function scoreFeatureRows(graph: ReliabilityGraph): string[][] {
-  const featureLabels: Array<[string, string, string]> = [
-    ["claim_support_rate", "Claim support", "Share of checked claims supported by source/verifier evidence."],
-    ["retrieval_alignment_score", "Source match", "How strongly retrieved snippets matched the extracted claims."],
-    ["source_quality_score", "Source quality", "Source provenance from metadata such as official docs, uploaded files, or lower-provenance pages."],
-    ["semantic_stability", "Meaning agreement", "Whether provider samples answered with the same meaning."],
-    ["sample_overlap_stability", "Sample overlap", "Lexical/meaning overlap between the main answer and other samples."],
-    ["retrieval_peak_score", "Best source match", "Strongest individual retrieved match."],
-    ["contradiction_rate", "Contradictions", "Share of checked claims contradicted by matched evidence."],
-    ["insufficient_evidence_rate", "Unsupported claims", "Share of checked claims not found in evidence."],
-  ];
-  return featureLabels
-    .filter(([key]) => graph.features[key] !== undefined)
-    .map(([key, label, meaning]) => [label, formatPercent(graph.features[key]), meaning]);
-}
-
 function scoreBreakdownRows(graph: ReliabilityGraph): string[][] {
   const breakdown = graph.answer.score_breakdown;
   if (breakdown) {
@@ -965,10 +826,19 @@ function qualityRank(quality: string): number {
 function answerMeta(graph: ReliabilityGraph) {
   const score = graph.answer.reliability_score;
   const verdict = graph.answer.final_decision ?? graph.answer.verdict;
+  const isV2 = graph.graph_version === "v2";
+  const prompts = graph.answer.improvement_prompts;
+  const breakdown = graph.answer.score_breakdown;
   const missing = [
     !verdict && "final decision",
     typeof score !== "number" && "reliability score",
+    isV2 && graph.answer.score_ready !== true && "completed score",
     !graph.answer.verdict_reason && "verdict reason",
+    isV2 && !graph.answer.reliability_reason && "score reason",
+    isV2 && !graph.answer.why_it_matters && "why it matters",
+    isV2 && !graph.answer.primary_risk && "primary risk",
+    isV2 && (!Array.isArray(prompts) || prompts.length === 0) && "improvement prompts",
+    isV2 && (!breakdown || !["evidence", "stability", "source_quality", "penalties"].every((key) => key in breakdown)) && "score breakdown",
     !graph.answer.evidence_status && "evidence status",
     !graph.answer.main_uncertainty && "main uncertainty",
     !graph.answer.next_best_action && "next action",

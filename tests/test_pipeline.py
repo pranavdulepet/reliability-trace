@@ -372,6 +372,27 @@ def test_reliability_repair_for_no_source_factual_question_is_specific():
     assert any("ExampleOS 9" in prompt["prompt"] and "Search" in prompt["prompt"] for prompt in summary["answer"]["improvement_prompts"])
 
 
+def test_generic_high_stakes_copy_does_not_claim_medical_legal_domain():
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    generic_state = {
+        "run": base_run(question="Should I use ReliabilityGraph for a high-stakes factual answer?"),
+        "question_type": "decision_qa",
+    }
+    domain_state = {
+        "run": base_run(question="Can I use this dosage advice as medical treatment?"),
+        "question_type": "factual_qa",
+    }
+
+    generic_copy = pipeline._why_it_matters(generic_state, "", [], False)
+    domain_copy = pipeline._why_it_matters(domain_state, "", [], False)
+    generic_action = pipeline._next_best_action(generic_state, [], [], False, None)
+
+    assert "high-impact" in generic_copy
+    assert "medical, legal, financial" not in generic_copy
+    assert "domain expert" in generic_action
+    assert "medical, legal, financial" in domain_copy
+
+
 def test_eval_claim_extraction_skips_source_grounding_meta_claims():
     pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
     claims = pipeline._eval_claims(

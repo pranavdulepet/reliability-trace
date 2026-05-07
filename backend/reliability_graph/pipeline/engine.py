@@ -842,7 +842,7 @@ class ReliabilityPipeline:
                     "sensitivity_notes": "Different constraints could flip the recommendation even if the factual claims are supported.",
                 }
             )
-        elif self._is_high_stakes_question(question):
+        elif self._is_domain_high_stakes_question(question):
             assumptions.append(
                 {
                     "assumption_id": "a2",
@@ -851,6 +851,17 @@ class ReliabilityPipeline:
                     "evidence_status": "untested",
                     "would_change_recommendation_if_false": True,
                     "sensitivity_notes": "Personal high-stakes action requires qualified review and primary-source verification.",
+                }
+            )
+        elif self._is_high_stakes_question(question):
+            assumptions.append(
+                {
+                    "assumption_id": "a2",
+                    "text": "The answer is used for orientation, not as final guidance for a high-impact decision.",
+                    "importance": "high",
+                    "evidence_status": "untested",
+                    "would_change_recommendation_if_false": True,
+                    "sensitivity_notes": "High-impact action requires primary-source verification and domain-specific review.",
                 }
             )
         else:
@@ -2144,6 +2155,20 @@ class ReliabilityPipeline:
 
     def _is_high_stakes_question(self, question: str) -> bool:
         lowered = question.lower()
+        return self._is_domain_high_stakes_question(question) or any(
+            term in lowered
+            for term in [
+                "high-stakes",
+                "high stakes",
+                "costly",
+                "irreversible",
+                "safety-critical",
+                "mission critical",
+            ]
+        )
+
+    def _is_domain_high_stakes_question(self, question: str) -> bool:
+        lowered = question.lower()
         terms = [
             "diagnosis",
             "dose",
@@ -2160,8 +2185,6 @@ class ReliabilityPipeline:
             "self-harm",
             "suicide",
             "contract",
-            "high-stakes",
-            "high stakes",
         ]
         return any(term in lowered for term in terms)
 
@@ -2424,7 +2447,7 @@ class ReliabilityPipeline:
         elif state["score_caps"]:
             verdict_reason = "The answer may be useful, but risk caps lowered the reliability score: %s." % state["score_caps"][0]
         else:
-            verdict_reason = "The answer may be useful, but evidence, calibration, or robustness signals are not strong enough for unqualified reliance."
+            verdict_reason = "The answer may be useful, but the audit did not find enough evidence support or answer stability for unqualified reliance."
 
         main_uncertainty = self._main_uncertainty(
             state,
@@ -2635,8 +2658,10 @@ class ReliabilityPipeline:
     ) -> str:
         question = state["run"]["question"]
         question_type = state.get("question_type")
-        if self._is_high_stakes_question(question):
+        if self._is_domain_high_stakes_question(question):
             return "This matters because medical, legal, financial, or safety-related answers can cause harm when unsupported."
+        if self._is_high_stakes_question(question):
+            return "This matters because high-impact answers can cause costly or hard-to-reverse mistakes when unsupported."
         if contradicted:
             return "This matters because one contradicted claim can reverse the practical takeaway of the answer."
         if no_source_factual:
@@ -2841,8 +2866,10 @@ class ReliabilityPipeline:
     ) -> str:
         if provider_error:
             return "Retry after checking provider settings, then compare whether the answer changes."
-        if self._is_high_stakes_question(state["run"]["question"]):
+        if self._is_domain_high_stakes_question(state["run"]["question"]):
             return "Use this as preparation only; verify with a qualified professional or primary source before acting."
+        if self._is_high_stakes_question(state["run"]["question"]):
+            return "Use this as preparation only; verify with primary sources or a domain expert before acting."
         if contradicted:
             return "Open the contradicted claim and source snippet before relying on the answer."
         if partially_supported:
