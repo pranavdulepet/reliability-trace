@@ -4,8 +4,8 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 
 ## Implemented
 
-- Chat-first React UI with multi-turn threads, composer attachments, streamed generated answers, inline/source citations, one post-audit Reliability Score summary, question-specific score reason, why-it-matters copy, repair prompt chips, an Elicit-like full-analysis drawer, About, Settings, and JSON export.
-- FastAPI backend with SQLite persistence, conversation/message storage, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
+- Chat-first React UI with multi-turn threads, conversation context/source-use indicators, composer attachments, streamed generated answers, inline/source citations, one post-audit Reliability Score summary, question-specific score reason, why-it-matters copy, repair prompt chips, an Elicit-like full-analysis drawer, About, Settings, and JSON export.
+- FastAPI backend with SQLite persistence, conversation/message storage, rolling continuity summaries, reusable thread source tracking, encrypted provider key storage, provider preferences, run streaming, run export, labels, and health checks.
 - Provider adapters for Tinker, OpenAI, Claude, Gemini, and OpenRouter behind one backend-only boundary.
 - Provider-strict v2 Reliability Evidence Graph pipeline with provider answer generation, evidence packet building, structured claim extraction, structured assumptions, structured evidence assessment, attachment/web scoped retrieval, claim-to-source matching, disagreement, static risk checks, scoring features, score caps, calibration metadata, and provider-neutral perturbation metadata.
 - Local persistence of completed v2 graphs in SQLite `runs.graph_json` and traces in `runs.trace_json`; exports return the stored graph.
@@ -14,6 +14,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - Provider-backed structured claim extraction, assumption extraction, decision framing, and evidence assessment with strict JSON validation, retry on invalid JSON, redaction, and stage-specific failure when required provider work fails.
 - Required NLI entailment-verifier boundary for claim/source relations, including setup health, Settings readiness, setup script, and graph fields for verifier scores.
 - Source ingestion for chat file/URL attachments, chunking, local hashed retrieval vectors, and chunk search.
+- Follow-up questions reuse recent conversation turns as native provider messages and reuse prior thread attachments/URLs as evidence without requiring the user to reattach them.
 - Always-on chat web retrieval with Tavily-backed source discovery, missing-search-key degradation, source dedupe, search activity, citations, inline citation annotations, and graph fields for search mode/search use.
 - Graph validation before completion so required reliability fields, score metadata, citations, and claim/evidence references cannot silently render as invented frontend state.
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.

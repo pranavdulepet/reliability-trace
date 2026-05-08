@@ -29,6 +29,7 @@ export interface RunCreate {
   user_message_id?: string | null;
   prior_context?: Array<{ role: string; content: string }>;
   attachment_document_ids?: string[];
+  thread_document_ids?: string[];
   search_mode?: SearchMode;
 }
 
@@ -248,7 +249,11 @@ export interface ReliabilityGraph {
     run_id: string;
     conversation_id?: string | null;
     attachment_document_ids?: string[];
+    thread_document_ids?: string[];
     web_search_document_ids?: string[];
+    prior_context_message_count?: number;
+    used_conversation_context?: boolean;
+    used_thread_sources?: boolean;
     question: string;
     question_type: string;
     provider: string;

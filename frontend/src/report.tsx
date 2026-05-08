@@ -368,7 +368,28 @@ export function ReliabilityCards({ graph, onUsePrompt }: { graph: ReliabilityGra
           ))}
         </div>
       </div>
+      <ContextUseStrip graph={graph} />
     </section>
+  );
+}
+
+function ContextUseStrip({ graph }: { graph: ReliabilityGraph }) {
+  const items = [];
+  const priorCount = graph.run.prior_context_message_count ?? 0;
+  const threadSourceCount = graph.run.thread_document_ids?.length ?? 0;
+  const currentAttachmentCount = graph.run.attachment_document_ids?.length ?? 0;
+  const webSourceCount = graph.run.web_search_document_ids?.length ?? 0;
+  if (priorCount > 0) items.push(`Used ${priorCount} prior chat item${priorCount === 1 ? "" : "s"}`);
+  if (threadSourceCount > currentAttachmentCount) items.push(`Reused ${threadSourceCount - currentAttachmentCount} earlier source${threadSourceCount - currentAttachmentCount === 1 ? "" : "s"}`);
+  if (currentAttachmentCount > 0) items.push(`Checked ${currentAttachmentCount} new attachment${currentAttachmentCount === 1 ? "" : "s"}`);
+  if (webSourceCount > 0) items.push(`Added ${webSourceCount} web source${webSourceCount === 1 ? "" : "s"}`);
+  if (items.length === 0) return null;
+  return (
+    <div className="context-use-strip" aria-label="Context used for this answer">
+      {items.map((item) => (
+        <span key={item}>{item}</span>
+      ))}
+    </div>
   );
 }
 

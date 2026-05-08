@@ -291,17 +291,17 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
     attachment_document_ids = _validate_attachment_document_ids(user_id, payload.attachment_document_ids)
     _resolve_provider_defaults(user_id, payload.provider)
     _require_verifier_ready()
-    prior_context = [
-        {"role": message["role"], "content": message["content"][:1800]}
-        for message in conversation["messages"][-10:]
-        if message["role"] in {"user", "assistant"}
-    ]
+    prior_context = _conversation_prior_context(conversation)
     user_message = storage.add_message(
         user_id,
         conversation_id,
         "user",
         payload.content.strip(),
         attachment_document_ids=attachment_document_ids,
+    )
+    storage.link_conversation_documents(user_id, conversation_id, attachment_document_ids)
+    thread_document_ids = _ordered_unique(
+        storage.list_conversation_document_ids(user_id, conversation_id) + attachment_document_ids
     )
     if len(conversation["messages"]) == 0:
         storage.update_conversation_title(user_id, conversation_id, _conversation_title(payload.content))
@@ -321,6 +321,7 @@ def create_conversation_message(conversation_id: str, payload: ConversationMessa
             user_message_id=user_message["message_id"],
             prior_context=prior_context,
             attachment_document_ids=attachment_document_ids,
+            thread_document_ids=thread_document_ids,
             search_mode="always",
         )
     )
@@ -458,19 +459,27 @@ async def stream_run_events(run_id: str, request: Request):
                     initial_run["graph"]["answer"]["final_answer"],
                     run_id=run_id,
                 )
+                _refresh_conversation_summary(user_id, initial_run["conversation_id"])
             yield _sse({"type": "completed", "progress": 1.0, "message": "Run already completed", "graph": initial_run["graph"]})
             return
 
         storage.set_run_status(user_id, run_id, "running")
         attachment_document_ids = initial_run.get("attachment_document_ids", [])
-        pre_trace, retrieval_document_ids, web_search = await _prepare_retrieval_for_run(user_id, initial_run, attachment_document_ids)
+        thread_document_ids = _ordered_unique(initial_run.get("thread_document_ids", []) + attachment_document_ids)
+        pre_trace, retrieval_document_ids, context_document_ids, web_search = await _prepare_retrieval_for_run(
+            user_id,
+            initial_run,
+            attachment_document_ids,
+            thread_document_ids,
+        )
         for index, span in enumerate(pre_trace, start=1):
             yield _sse({"type": "progress", "span": span, "progress": min(0.08, index * 0.04), "message": span["input_summary"]})
         run_context = {
             **initial_run,
+            "thread_document_ids": thread_document_ids,
             "search_mode": (web_search.get("route") or {}).get("search_mode") or initial_run.get("search_mode"),
             "web_search": web_search,
-            "web_search_document_ids": [document_id for document_id in retrieval_document_ids if document_id not in attachment_document_ids],
+            "web_search_document_ids": [document_id for document_id in retrieval_document_ids if document_id not in context_document_ids],
             "search_used": any(call.get("result_count", 0) > 0 for call in web_search.get("calls", [])),
         }
         pipeline = ReliabilityPipeline(
@@ -495,6 +504,7 @@ async def stream_run_events(run_id: str, request: Request):
                             event["graph"]["answer"]["final_answer"],
                             run_id=run_id,
                         )
+                        _refresh_conversation_summary(user_id, run_context["conversation_id"])
                 yield _sse(event)
         except PipelineStageError as exc:
             message = _sanitize_error(exc.message)
@@ -508,12 +518,18 @@ async def stream_run_events(run_id: str, request: Request):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-async def _prepare_retrieval_for_run(user_id: str, run: Dict[str, object], attachment_document_ids: List[str]):
+async def _prepare_retrieval_for_run(
+    user_id: str,
+    run: Dict[str, object],
+    attachment_document_ids: List[str],
+    thread_document_ids: Optional[List[str]] = None,
+):
     preference = storage.get_search_preference(user_id)
     search_mode = "always" if run.get("use_live_provider", True) else (run.get("search_mode") or preference["search_mode"])
+    context_document_ids = _ordered_unique((thread_document_ids or []) + attachment_document_ids)
     route = choose_research_route(
         run["question"],
-        attachment_document_ids,
+        context_document_ids,
         search_mode,
     )
     route_dict = route_to_dict(route)
@@ -527,10 +543,24 @@ async def _prepare_retrieval_for_run(user_id: str, run: Dict[str, object], attac
             {"route": route_dict},
         )
     ]
-    retrieval_document_ids = list(attachment_document_ids)
+    retrieval_document_ids = list(context_document_ids)
+    if run.get("prior_context") or context_document_ids:
+        pre_trace.append(
+            _span(
+                run["run_id"],
+                "conversation_context",
+                "completed",
+                "Loaded prior chat context and reusable thread sources.",
+                {
+                    "prior_context_messages": len(run.get("prior_context") or []),
+                    "thread_source_count": len(context_document_ids),
+                    "current_attachment_count": len(attachment_document_ids),
+                },
+            )
+        )
 
     if route.route not in {"web_search", "hybrid"}:
-        return pre_trace, retrieval_document_ids, web_search
+        return pre_trace, retrieval_document_ids, context_document_ids, web_search
 
     api_key = _resolve_search_key(user_id)
     if not api_key:
@@ -551,7 +581,7 @@ async def _prepare_retrieval_for_run(user_id: str, run: Dict[str, object], attac
                 {"calls": web_search["calls"]},
             )
         )
-        return pre_trace, retrieval_document_ids, web_search
+        return pre_trace, retrieval_document_ids, context_document_ids, web_search
 
     try:
         loop = asyncio.get_running_loop()
@@ -602,7 +632,7 @@ async def _prepare_retrieval_for_run(user_id: str, run: Dict[str, object], attac
                 {"calls": web_search["calls"]},
             )
         )
-    return pre_trace, retrieval_document_ids, web_search
+    return pre_trace, retrieval_document_ids, context_document_ids, web_search
 
 
 def _index_web_search_results(user_id: str, results: List[Dict[str, object]]) -> List[Dict[str, object]]:
@@ -747,6 +777,59 @@ def _validate_attachment_document_ids(user_id: str, document_ids):
     if missing:
         raise HTTPException(status_code=400, detail="attachment document not found")
     return document_ids
+
+
+def _conversation_prior_context(conversation: Dict[str, object]) -> List[Dict[str, str]]:
+    messages = [message for message in conversation.get("messages", []) if message.get("role") in {"user", "assistant"}]
+    recent = messages[-8:]
+    older = messages[:-8]
+    summary = str(conversation.get("summary") or "").strip() or _summarize_context_messages(older)
+    context: List[Dict[str, str]] = []
+    if summary:
+        context.append(
+            {
+                "role": "system",
+                "content": "Earlier conversation summary for continuity only, not source evidence: %s" % summary[:1600],
+            }
+        )
+    for message in recent:
+        content = " ".join(str(message.get("content") or "").split())
+        if content:
+            context.append({"role": str(message["role"]), "content": content[:1200]})
+    return context
+
+
+def _refresh_conversation_summary(user_id: str, conversation_id: str) -> None:
+    try:
+        conversation = storage.get_conversation(user_id, conversation_id)
+    except KeyError:
+        return
+    messages = [message for message in conversation.get("messages", []) if message.get("role") in {"user", "assistant"}]
+    older = messages[:-8]
+    summary = _summarize_context_messages(older)
+    storage.update_conversation_summary(user_id, conversation_id, summary, len(older))
+
+
+def _summarize_context_messages(messages: List[Dict[str, object]]) -> str:
+    if not messages:
+        return ""
+    lines = []
+    for message in messages[-24:]:
+        role = "User" if message.get("role") == "user" else "Assistant"
+        content = " ".join(str(message.get("content") or "").split())
+        if content:
+            lines.append("%s: %s" % (role, content[:260]))
+    return "\n".join(lines)[-2500:]
+
+
+def _ordered_unique(values: List[str]) -> List[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        if value and value not in seen:
+            ordered.append(value)
+            seen.add(value)
+    return ordered
 
 
 def _conversation_title(content: str) -> str:

@@ -44,6 +44,7 @@ class RunCreate(BaseModel):
     user_message_id: Optional[str] = Field(default=None, max_length=80)
     prior_context: List[Dict[str, str]] = Field(default_factory=list)
     attachment_document_ids: List[str] = Field(default_factory=list)
+    thread_document_ids: List[str] = Field(default_factory=list)
     search_mode: str = Field(default="auto")
 
     @field_validator("provider")

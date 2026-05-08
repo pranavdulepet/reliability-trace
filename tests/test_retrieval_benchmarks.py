@@ -181,6 +181,28 @@ def test_storage_conversation_messages_and_run_linkage(tmp_path):
     assert storage.get_run("user_a", run["run_id"])["attachment_document_ids"] == ["doc_a"]
 
 
+def test_storage_tracks_reusable_conversation_documents_and_summary(tmp_path):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    conversation = storage.create_conversation("user_a", "Thread sources")
+    document = storage.save_document(
+        "user_a",
+        "Release note",
+        "ExampleOS 9 supports enterprise deployments.",
+        None,
+        "chat_attachment",
+        build_chunks("ExampleOS 9 supports enterprise deployments."),
+    )
+
+    storage.link_conversation_documents("user_a", conversation["conversation_id"], [document["document_id"]])
+    storage.update_conversation_summary("user_a", conversation["conversation_id"], "The user is asking about ExampleOS 9.", 4)
+    reloaded = storage.get_conversation("user_a", conversation["conversation_id"])
+
+    assert storage.list_conversation_document_ids("user_a", conversation["conversation_id"]) == [document["document_id"]]
+    assert reloaded["summary"] == "The user is asking about ExampleOS 9."
+    assert reloaded["summary_message_count"] == 4
+
+
 def test_storage_provider_preferences_are_user_scoped(tmp_path):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()

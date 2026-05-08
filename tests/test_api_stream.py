@@ -148,6 +148,74 @@ def test_conversation_chat_forces_web_search_even_when_payload_says_off(tmp_path
     assert completed["graph"]["run"]["search_mode"] == "always"
 
 
+def test_followup_reuses_prior_context_and_thread_sources(tmp_path, monkeypatch):
+    storage = Storage(tmp_path / "rg.sqlite")
+    storage.init_db()
+    monkeypatch.setattr(api_module, "storage", storage)
+    monkeypatch.setattr(api_module, "entailment_verifier", FixtureEntailmentVerifier())
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: FakeProvider())
+    monkeypatch.setenv("OPENAI_API_KEY", "test-provider-key")
+    conversation = storage.create_conversation(api_module.settings.user_id, "ExampleOS")
+    document = storage.save_document(
+        api_module.settings.user_id,
+        "ExampleOS note",
+        "ExampleOS 9 supports enterprise deployments.",
+        None,
+        "chat_attachment",
+        [{"chunk_index": 0, "text": "ExampleOS 9 supports enterprise deployments.", "embedding_json": "[]", "token_count": 5}],
+    )
+    storage.add_message(
+        api_module.settings.user_id,
+        conversation["conversation_id"],
+        "user",
+        "Use this release note.",
+        attachment_document_ids=[document["document_id"]],
+    )
+    storage.link_conversation_documents(api_module.settings.user_id, conversation["conversation_id"], [document["document_id"]])
+    storage.add_message(
+        api_module.settings.user_id,
+        conversation["conversation_id"],
+        "assistant",
+        "The note says ExampleOS 9 supports enterprise deployments.",
+    )
+
+    with TestClient(api_module.app) as client:
+        created = client.post(
+            f"/api/conversations/{conversation['conversation_id']}/messages",
+            json={"content": "What does that imply for buyers?", "attachment_document_ids": []},
+        )
+        run_id = created.json()["run"]["run_id"]
+        with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+            body = "".join(response.iter_text())
+
+    completed = storage.get_run(api_module.settings.user_id, run_id)
+
+    assert created.status_code == 201
+    assert response.status_code == 200
+    assert "event: completed" in body
+    assert completed["thread_document_ids"] == [document["document_id"]]
+    assert any("ExampleOS 9 supports" in item["content"] for item in completed["prior_context"])
+    assert completed["graph"]["run"]["used_conversation_context"] is True
+    assert completed["graph"]["run"]["used_thread_sources"] is True
+
+
+def test_prior_context_keeps_recent_turns_and_summarizes_older_turns():
+    messages = []
+    for index in range(12):
+        messages.append(
+            {
+                "role": "user" if index % 2 == 0 else "assistant",
+                "content": "Turn %d about the reliability plan." % index,
+            }
+        )
+    context = api_module._conversation_prior_context({"summary": "", "messages": messages})
+
+    assert context[0]["role"] == "system"
+    assert "Turn 0" in context[0]["content"]
+    assert len([item for item in context if item["role"] in {"user", "assistant"}]) == 8
+    assert context[-1]["content"] == "Turn 11 about the reliability plan."
+
+
 def test_missing_search_key_is_reported_as_degraded_evidence(tmp_path, monkeypatch):
     storage = Storage(tmp_path / "rg.sqlite")
     storage.init_db()

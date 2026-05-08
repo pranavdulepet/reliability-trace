@@ -1234,6 +1234,27 @@ label {
   line-height: 1.35;
 }
 
+.context-use-strip {
+  align-items: center;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  grid-column: 1 / -1;
+  padding-top: 12px;
+}
+
+.context-use-strip span {
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  padding: 5px 9px;
+}
+
 .analysis-drawer {
   background: var(--surface);
   border: 1px solid var(--line);

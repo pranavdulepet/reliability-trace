@@ -50,6 +50,7 @@ class Storage:
                   search_mode text,
                   prior_context_json text,
                   attachment_document_ids_json text,
+                  thread_document_ids_json text,
                   graph_json text,
                   trace_json text,
                   error text
@@ -59,6 +60,9 @@ class Storage:
                   conversation_id text primary key,
                   user_id text not null,
                   title text not null,
+                  summary text,
+                  summary_message_count integer not null default 0,
+                  summary_updated_at text,
                   created_at text not null,
                   updated_at text not null
                 );
@@ -72,6 +76,15 @@ class Storage:
                   run_id text,
                   attachment_document_ids_json text,
                   created_at text not null
+                );
+
+                create table if not exists conversation_documents (
+                  conversation_id text not null,
+                  user_id text not null,
+                  document_id text not null,
+                  source text not null,
+                  created_at text not null,
+                  primary key (conversation_id, user_id, document_id)
                 );
 
                 create table if not exists provider_preferences (
@@ -140,6 +153,9 @@ class Storage:
 
                 create index if not exists messages_conversation_idx
                   on messages(user_id, conversation_id, created_at);
+
+                create index if not exists conversation_documents_idx
+                  on conversation_documents(user_id, conversation_id, created_at);
                 """
             )
             self._ensure_column(con, "runs", "conversation_id", "text")
@@ -147,6 +163,10 @@ class Storage:
             self._ensure_column(con, "runs", "search_mode", "text")
             self._ensure_column(con, "runs", "prior_context_json", "text")
             self._ensure_column(con, "runs", "attachment_document_ids_json", "text")
+            self._ensure_column(con, "runs", "thread_document_ids_json", "text")
+            self._ensure_column(con, "conversations", "summary", "text")
+            self._ensure_column(con, "conversations", "summary_message_count", "integer not null default 0")
+            self._ensure_column(con, "conversations", "summary_updated_at", "text")
 
     def _ensure_column(self, con: sqlite3.Connection, table: str, column: str, column_type: str) -> None:
         columns = {row["name"] for row in con.execute("pragma table_info(%s)" % table).fetchall()}
@@ -422,7 +442,7 @@ class Storage:
         with self._connect() as con:
             row = con.execute(
                 """
-                select conversation_id, title, created_at, updated_at
+                select conversation_id, title, summary, summary_message_count, summary_updated_at, created_at, updated_at
                 from conversations
                 where user_id = ? and conversation_id = ?
                 """,
@@ -459,11 +479,69 @@ class Storage:
                 "delete from runs where user_id = ? and conversation_id = ?",
                 (user_id, conversation_id),
             )
+            con.execute(
+                "delete from conversation_documents where user_id = ? and conversation_id = ?",
+                (user_id, conversation_id),
+            )
             cursor = con.execute(
                 "delete from conversations where user_id = ? and conversation_id = ?",
                 (user_id, conversation_id),
             )
         return cursor.rowcount > 0
+
+    def link_conversation_documents(
+        self,
+        user_id: str,
+        conversation_id: str,
+        document_ids: List[str],
+        source: str = "message_attachment",
+    ) -> None:
+        if not document_ids:
+            return
+        self.get_conversation(user_id, conversation_id)
+        now = utcnow()
+        with self._connect() as con:
+            for document_id in dict.fromkeys(document_ids):
+                exists = con.execute(
+                    "select 1 from documents where user_id = ? and document_id = ?",
+                    (user_id, document_id),
+                ).fetchone()
+                if exists is None:
+                    raise KeyError("document not found")
+                con.execute(
+                    """
+                    insert or ignore into conversation_documents
+                      (conversation_id, user_id, document_id, source, created_at)
+                    values (?, ?, ?, ?, ?)
+                    """,
+                    (conversation_id, user_id, document_id, source, now),
+                )
+
+    def list_conversation_document_ids(self, user_id: str, conversation_id: str, limit: int = 20) -> List[str]:
+        self.get_conversation(user_id, conversation_id)
+        with self._connect() as con:
+            rows = con.execute(
+                """
+                select document_id
+                from conversation_documents
+                where user_id = ? and conversation_id = ?
+                order by created_at desc
+                limit ?
+                """,
+                (user_id, conversation_id, max(1, limit)),
+            ).fetchall()
+        return [str(row["document_id"]) for row in rows]
+
+    def update_conversation_summary(self, user_id: str, conversation_id: str, summary: str, message_count: int) -> None:
+        with self._connect() as con:
+            con.execute(
+                """
+                update conversations
+                set summary = ?, summary_message_count = ?, summary_updated_at = ?, updated_at = ?
+                where user_id = ? and conversation_id = ?
+                """,
+                (summary.strip()[:4000] or None, max(0, message_count), utcnow(), utcnow(), user_id, conversation_id),
+            )
 
     def add_message(
         self,
@@ -559,8 +637,8 @@ class Storage:
                 insert into runs
                   (run_id, user_id, conversation_id, user_message_id, question, provider, model, samples,
                    max_cost_usd, use_live_provider, status, created_at, search_mode, prior_context_json,
-                   attachment_document_ids_json)
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                   attachment_document_ids_json, thread_document_ids_json)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -577,6 +655,7 @@ class Storage:
                     request.search_mode,
                     json.dumps(request.prior_context),
                     json.dumps(request.attachment_document_ids),
+                    json.dumps(request.thread_document_ids),
                 ),
             )
         return self.get_run(user_id, run_id)
@@ -587,7 +666,7 @@ class Storage:
                 """
                 select run_id, conversation_id, user_message_id, question, provider, model, samples,
                        max_cost_usd, use_live_provider, status, created_at, completed_at, search_mode,
-                       attachment_document_ids_json, error
+                       attachment_document_ids_json, thread_document_ids_json, error
                 from runs
                 where user_id = ?
                 order by created_at desc
@@ -838,6 +917,7 @@ class Storage:
         data["attachment_document_ids"] = (
             json.loads(data["attachment_document_ids_json"]) if data.get("attachment_document_ids_json") else []
         )
+        data["thread_document_ids"] = json.loads(data["thread_document_ids_json"]) if data.get("thread_document_ids_json") else []
         if include_graph:
             data["graph"] = json.loads(data["graph_json"]) if data.get("graph_json") else None
             data["trace"] = json.loads(data["trace_json"]) if data.get("trace_json") else []
@@ -845,6 +925,7 @@ class Storage:
         data.pop("trace_json", None)
         data.pop("prior_context_json", None)
         data.pop("attachment_document_ids_json", None)
+        data.pop("thread_document_ids_json", None)
         data.pop("user_id", None)
         return data
 

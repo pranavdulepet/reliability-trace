@@ -24,6 +24,7 @@ def base_run(**overrides):
         "graph": None,
         "error": None,
         "attachment_document_ids": [],
+        "thread_document_ids": [],
         "prior_context": [],
     }
     run.update(overrides)
@@ -98,6 +99,28 @@ def test_provider_strict_pipeline_builds_graph(monkeypatch):
     assert graph["export"]["contains_plaintext_provider_keys"] is False
     assert len(graph["trace"]) == len(ReliabilityPipeline.steps)
     assert "preview" not in json.dumps(graph["disagreement"]["candidate_answers"]).lower()
+
+
+def test_answer_generation_uses_prior_context_as_native_messages(monkeypatch):
+    provider = FakeProvider(answer="Use the earlier RAG context to compare the options.")
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    run_pipeline(
+        base_run(
+            question="How does it compare to fine-tuning?",
+            prior_context=[
+                {"role": "user", "content": "We are discussing retrieval-augmented generation."},
+                {"role": "assistant", "content": "RAG retrieves relevant source material before answering."},
+            ],
+        )
+    )
+
+    candidate_request = provider.requests[0]
+    roles = [message.role for message in candidate_request.messages]
+    assert roles[:4] == ["system", "system", "user", "assistant"]
+    assert candidate_request.messages[-1].role == "user"
+    assert "How does it compare" in candidate_request.messages[-1].content
+    assert any("retrieval-augmented generation" in message.content for message in candidate_request.messages)
 
 
 def test_benchmark_tuned_weight_variants_are_not_labeled_research_prior(monkeypatch):

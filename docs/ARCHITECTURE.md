@@ -24,7 +24,7 @@ The backend exposes REST endpoints for keys, provider preferences, verifier heal
 
 Production chat is provider-strict. The API rejects chat runs unless a real LLM provider is resolved and the local NLI verifier is ready. If answer generation, structured claim extraction, structured assumptions, structured decision support, structured evidence assessment, or the verifier fails after retry, the run fails with a stage-specific error instead of producing a synthetic substitute answer or audit.
 
-SQLite is the local storage target because it keeps setup small. The storage layer is deliberately isolated so hosted mode can move to Postgres without changing the frontend contract. Documents, fetched pages, and web search results are chunked and embedded with local hashed vectors. Chat retrieval is scoped to the files, URLs, and web results selected for the triggering message.
+SQLite is the local storage target because it keeps setup small. The storage layer is deliberately isolated so hosted mode can move to Postgres without changing the frontend contract. Conversations store messages, a compact continuity summary for older turns, and a thread-source index for user-attached files/URLs that should remain available in follow-up turns. Documents, fetched pages, and web search results are chunked and embedded with local hashed vectors. Chat retrieval is scoped to current attachments, reusable thread sources, and web results selected for the triggering message.
 
 URL fetch rejects credentials, loopback/private/link-local hosts, unsafe redirects, unsupported content types, and oversized responses. Duplicate documents are reused by URL or content hash.
 
@@ -84,7 +84,7 @@ Claim checking has two layers. The selected provider extracts claims and assesse
 The frontend is a React + TypeScript app. It presents:
 
 - Chat-first question flow with provider-backed streaming answer generation.
-- Conversation history and multi-turn message threads.
+- Conversation history and multi-turn message threads, including compact visibility into whether a response used prior chat, earlier thread sources, new attachments, or web evidence.
 - Composer attachments for local text files and URLs.
 - Provider keys and default model controls in Settings.
 - Entailment verifier readiness in Settings.
