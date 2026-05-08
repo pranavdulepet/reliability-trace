@@ -53,22 +53,31 @@ Current validation supports the score as a diagnostic ranking signal. It does no
 
 The latest audit also records unresolved source conflicts: when a matched source snippet appears to conflict with a claim but the provider plus entailment verifier do not mark the claim as contradicted, the claim remains conservatively labeled by the verifier result while the conflict is surfaced for review. This improves failure visibility without pretending a lightweight source-match signal is a definitive contradiction detector.
 
-Latest local review gate run:
+For source-grounded summarization, the audit treats unsupported temporal scope as overreach. If the answer adds phrasing such as "in recent years" or "currently" and the matched source snippets do not directly contain that scope, the claim is downgraded to partial support and the summary score is capped. This is intentionally stricter than general chat because the user asked for fidelity to supplied material.
+
+Decision labels and score bands are also validated together: `do_not_rely` answers must score 49 or below, and `rely` answers must score 75 or above. This prevents a user-facing mismatch such as "do not rely" with a medium-high score.
+
+Latest local review gate runs:
 
 ```bash
 UV_CACHE_DIR=.uv-cache uv run python scripts/run_reliability_evals.py --benchmark all --mode dev --limit 50 --offline --fail-on-regression
+UV_CACHE_DIR=.uv-cache uv run python scripts/run_reliability_evals.py --benchmark all --mode test --limit 50 --offline --fail-on-regression
 ```
 
-The May 7, 2026 run used cached official datasets and no live provider calls. It passed the regression gate with:
+The May 8, 2026 runs used cached official datasets and no live provider calls. They passed the regression gate with:
 
-| Benchmark | N | AUROC | AUPRC | Claim relation recall on bad answers | False-safe |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| RAGTruth | 50 | 0.6183 | 0.4810 | 0.7000 | 0.0000 |
-| SelfCheckGPT WikiBio | 50 | 0.9894 | 1.0000 | 0.7447 | 0.0000 |
-| SimpleQA oracle-answer slice | 50 | n/a | n/a | n/a | n/a |
-| Overall fixed-answer gate | 150 | 0.8543 | 0.7077 | 0.7313 | 0.0000 |
+| Split | Benchmark | N | AUROC | AUPRC | Claim relation recall on bad answers | False-safe | Bad examples scoring >= 60 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Dev | RAGTruth | 50 | 0.5842 | 0.4678 | 0.7000 | 0.0000 | 0 |
+| Dev | SelfCheckGPT WikiBio | 50 | 0.9326 | 0.9959 | 0.7447 | 0.0000 | 0 |
+| Dev | Overall fixed-answer gate | 150 | 0.8574 | 0.7173 | 0.7313 | 0.0000 | 0 |
+| Held-out | RAGTruth | 50 | 0.7642 | 0.6274 | 0.9000 | 0.0000 | 0 |
+| Held-out | SelfCheckGPT WikiBio | 50 | 0.9271 | 0.9987 | 0.7500 | 0.0000 | 0 |
+| Held-out | Overall fixed-answer gate | 150 | 0.8554 | 0.6965 | 0.7941 | 0.0000 | 0 |
 
-This is good enough to show a conservative prototype with no false-safe cases in the small gate. It is not enough to claim state-of-the-art reliability detection. RAGTruth remains the main research weakness.
+This is good enough to show a conservative prototype with no false-safe cases and no bad labeled examples above the medium-score threshold in the small dev/held-out gates. It is not enough to claim state-of-the-art reliability detection. RAGTruth remains the main research weakness, especially for subtle source-grounded overreach.
+
+A new weight fit was attempted after the cap changes, but the candidate over-weighted stability, reduced RAGTruth source-grounded ranking, and reintroduced a held-out bad example above 60. The tracked weights were kept; the safety-cap changes are explicit product policy, not learned weights.
 
 Before making a stronger research claim, run and report:
 

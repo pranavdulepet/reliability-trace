@@ -5,6 +5,7 @@ import os
 import random
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -152,8 +153,17 @@ async def _run_examples(args: argparse.Namespace, examples, output_dir: Path, re
 
 
 def _default_output_dir() -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return Path("data/evals/runs") / stamp
+    runs_dir = Path("data/evals/runs")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    base = "%s_%s_%s" % (stamp, os.getpid(), uuid.uuid4().hex[:8])
+    candidate = runs_dir / base
+    if not candidate.exists():
+        return candidate
+    for suffix in range(1, 100):
+        candidate = runs_dir / ("%s_%02d" % (base, suffix))
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError("could not allocate a unique eval output directory")
 
 
 def _manifest(args: argparse.Namespace, cache_dir: Path, output_dir: Path, selected, examples) -> dict:

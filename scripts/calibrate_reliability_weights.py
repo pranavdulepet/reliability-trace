@@ -222,6 +222,7 @@ def _derive_caps(row: Dict[str, Any]) -> Dict[str, Any]:
     ]
     return {
         "evidence_required": evidence_required,
+        "source_grounded_summary": _is_source_grounded_summary_question(str((graph.get("run") or {}).get("question") or "")),
         "partial_support_claims": len([item for item in assessments if item.get("status") == "partially_supported"]),
         "critical_factual_contradictions": len(
             [
@@ -245,6 +246,11 @@ def _derive_caps(row: Dict[str, Any]) -> Dict[str, Any]:
 
 def _has_external_evidence(evidence: List[Dict[str, Any]]) -> bool:
     return any(item.get("source_type") not in {"system_trace", "model_output", "internal_policy"} for item in evidence)
+
+
+def _is_source_grounded_summary_question(question: str) -> bool:
+    lowered = question.strip().lower()
+    return lowered.startswith(("summarize ", "summarise ", "summary of ", "write a summary", "provide a summary"))
 
 
 def _candidate_weights(base: Dict[str, float], rng: random.Random) -> Dict[str, float]:

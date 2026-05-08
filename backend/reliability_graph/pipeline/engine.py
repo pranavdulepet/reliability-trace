@@ -1341,11 +1341,19 @@ class ReliabilityPipeline:
             provider_relation = provider_by_claim.get(claim["claim_id"], {}).get("relation")
             relation = self._combine_provider_and_verifier_relation(provider_relation, verifier_result.relation)
             source_conflict = self._claim_has_source_conflict(evidence_items)
+            temporal_overreach = self._claim_has_unmatched_temporal_scope(claim["text"], evidence_items)
+            if relation == "supported" and temporal_overreach:
+                relation = "partially_supported"
             why = self._combined_assessment_reason(provider_by_claim.get(claim["claim_id"]), verifier_result, relation)
             if source_conflict and relation != "contradicted":
                 why = (
                     why.rstrip(".")
                     + ". A matched source snippet also appears to conflict with this claim, so inspect the evidence before relying on it."
+                )
+            if temporal_overreach:
+                why = (
+                    why.rstrip(".")
+                    + ". The claim adds a temporal scope that was not directly present in the matched source snippets."
                 )
             assessment = self._assessment_from_relation(
                 claim_id=claim["claim_id"],
@@ -1364,6 +1372,7 @@ class ReliabilityPipeline:
                     "neutral_score": verifier_result.neutral_score,
                     "provider_relation": provider_relation,
                     "source_conflict": source_conflict,
+                    "temporal_overreach": temporal_overreach,
                 }
             )
             assessments.append(assessment)
@@ -1375,6 +1384,34 @@ class ReliabilityPipeline:
             and float(item.get("relevance_score", 0.0)) >= 0.20
             for item in evidence_items
         )
+
+    def _claim_has_unmatched_temporal_scope(self, claim_text: str, evidence_items: List[Dict[str, Any]]) -> bool:
+        claim = re.sub(r"\s+", " ", claim_text.lower())
+        evidence = " ".join(str(item.get("snippet") or "").lower() for item in evidence_items)
+        scoped_phrases = [
+            "in recent years",
+            "recent years",
+            "as of",
+            "as recently as",
+            "currently",
+            "current",
+            "latest",
+            "now",
+            "today",
+            "this year",
+            "this month",
+            "up-to-date",
+            "real-time",
+        ]
+        for phrase in scoped_phrases:
+            if phrase in claim and phrase not in evidence:
+                return True
+        claim_years = set(re.findall(r"\b(?:19|20)\d{2}\b", claim))
+        if claim_years:
+            evidence_years = set(re.findall(r"\b(?:19|20)\d{2}\b", evidence))
+            if not claim_years.issubset(evidence_years):
+                return True
+        return False
 
     def _best_verifier_result(self, claim_text: str, evidence_items: List[Dict[str, Any]]) -> EntailmentResult:
         verifier = self.entailment_verifier
@@ -1660,6 +1697,7 @@ class ReliabilityPipeline:
         ]
         caps = {
             "evidence_required": evidence_required,
+            "source_grounded_summary": self._is_source_grounded_summary_question(state["run"]["question"]),
             "partial_support_claims": len([assessment for assessment in scored_assessments if assessment["status"] == "partially_supported"]),
             "critical_factual_contradictions": len(
                 [
@@ -2376,6 +2414,10 @@ class ReliabilityPipeline:
             "regulation",
         ]
         return state["question_type"] == "factual_qa" and any(term in question for term in current_terms)
+
+    def _is_source_grounded_summary_question(self, question: str) -> bool:
+        lowered = question.strip().lower()
+        return lowered.startswith(("summarize ", "summarise ", "summary of ", "write a summary", "provide a summary"))
 
     def _safe_error_text(self, message: str) -> str:
         cleaned = self._redact_sensitive_text(message)
@@ -3117,8 +3159,8 @@ class ReliabilityPipeline:
             state.get("features", {}).get("source_quality_score", 0.0) >= 0.50
             and any(item.get("relation") == "contradicted" for item in state.get("claim_assessments", []))
         ):
-            state["score"] = min(int(state.get("score", 0)), 60)
-            cap = "source contradiction found: score capped at 60"
+            state["score"] = min(int(state.get("score", 0)), 49)
+            cap = "source contradiction found: score capped at 49"
             if cap not in state["score_caps"]:
                 state["score_caps"].append(cap)
 
@@ -3151,8 +3193,10 @@ class ReliabilityPipeline:
                     "neutral_score": assessment.get("neutral_score"),
                     "support_score": assessment.get("support_score"),
                     "risk_flags": list(claim.get("risk_flags", []))
-                    + (["source_conflict"] if assessment.get("source_conflict") else []),
+                    + (["source_conflict"] if assessment.get("source_conflict") else [])
+                    + (["temporal_overreach"] if assessment.get("temporal_overreach") else []),
                     "source_conflict": bool(assessment.get("source_conflict")),
+                    "temporal_overreach": bool(assessment.get("temporal_overreach")),
                 }
             )
         return rows
@@ -3269,6 +3313,12 @@ class ReliabilityPipeline:
         run = state["run"]
         self._apply_runtime_score_caps(state)
         reliability = self._reliability_summary(state)
+        if reliability["answer"]["verdict"] == "do_not_rely" and int(state.get("score", 0)) > 49:
+            state["score"] = 49
+            cap = "blocking reliability decision: score capped at 49"
+            if cap not in state["score_caps"]:
+                state["score_caps"].append(cap)
+            reliability = self._reliability_summary(state)
         citations = self._citations(state)
         claim_audit = self._claim_audit_rows(state)
         evidence_sources = self._evidence_source_rows(state)
@@ -3402,6 +3452,22 @@ class ReliabilityPipeline:
                 "invalid_reliability_graph",
                 "graph_validation",
                 "Reliability score is missing or invalid.",
+                retryable=False,
+            )
+        score = int(answer.get("reliability_score"))
+        final_decision = answer.get("final_decision") or answer.get("verdict")
+        if graph.get("graph_version") == GRAPH_VERSION and final_decision == "do_not_rely" and score > 49:
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Do-not-rely answers must have Reliability Score <= 49.",
+                retryable=False,
+            )
+        if graph.get("graph_version") == GRAPH_VERSION and final_decision == "rely" and score < 75:
+            raise PipelineStageError(
+                "invalid_reliability_graph",
+                "graph_validation",
+                "Rely answers must have Reliability Score >= 75.",
                 retryable=False,
             )
         if graph.get("graph_version") == GRAPH_VERSION and answer.get("score_ready") is not True:

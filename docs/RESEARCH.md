@@ -36,6 +36,7 @@ The deeper signals below remain in the stored graph, export, and details.
 - Source-grounded checks ignore answer-format meta claims like "here is a summary" and focus scoring on factual content claims.
 - Missing sources are handled differently by question type: they block current, high-stakes, and source-required factual answers, but only mark general explanations as not source-grounded.
 - Partial source support is capped more aggressively when retrieval alignment is weak, because a nearby snippet is not enough for RAG/source-grounded reliability if the exact claim is only partly established.
+- Source-grounded summaries are held to a stricter fidelity standard than general chat: if a checked claim adds temporal scope, freshness wording, or a year that is not directly present in the matched snippets, the claim is downgraded and summary-level partial support caps the score.
 - Production chat no longer substitutes local synthetic answers, fallback claim extraction, or heuristic claim/source relations when provider or verifier work fails. Eval-only fixed-answer runs still use controlled fixtures so benchmark scoring can run offline.
 - Frontend fallback verdicts and evidence summaries were removed. Missing graph fields now render as incomplete analysis instead of invented reliability output.
 

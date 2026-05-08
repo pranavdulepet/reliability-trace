@@ -303,6 +303,26 @@ def test_graph_validation_rejects_missing_reliability_fields(monkeypatch):
         raise AssertionError("missing reliability fields did not fail graph validation")
 
 
+def test_graph_validation_rejects_decision_score_mismatch(monkeypatch):
+    provider = FakeProvider()
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(base_run(question="Explain why claim-level source checking helps reliability."))[-1]["graph"]
+    graph["answer"]["final_decision"] = "do_not_rely"
+    graph["answer"]["verdict"] = "do_not_rely"
+    graph["answer"]["reliability_score"] = 60
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+
+    try:
+        pipeline._validate_graph(graph)
+    except PipelineStageError as exc:
+        assert exc.code == "invalid_reliability_graph"
+        assert exc.stage == "graph_validation"
+        assert "Do-not-rely" in exc.message
+    else:
+        raise AssertionError("decision/score mismatch did not fail graph validation")
+
+
 def test_reliability_summary_names_partial_support_without_generic_action():
     pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
     state = {
@@ -694,6 +714,38 @@ def test_unresolved_source_conflict_is_visible_but_not_overruled(monkeypatch):
     assert "conflict" in assessment["why"]
     assert graph["features"]["source_conflict_rate"] == 1.0
     assert not any("source conflict" in cap for cap in graph["score_caps"])
+
+
+def test_temporal_scope_overreach_is_not_treated_as_direct_support(monkeypatch):
+    provider = FakeProvider(
+        answer="In recent years, ExampleOS 9 has supported enterprise deployments.",
+        claims=[
+            {
+                "text": "In recent years, ExampleOS 9 has supported enterprise deployments.",
+                "type": "factual",
+                "importance": "medium",
+                "checkability": "externally_checkable",
+            }
+        ],
+        evidence_relation="supported",
+    )
+    monkeypatch.setattr(engine_module, "build_provider", lambda _provider, _api_key: provider)
+
+    graph = run_pipeline(
+        base_run(question="Summarize the attached release note.", attachment_document_ids=["doc_1"]),
+        chunk_source("ExampleOS 9 supports enterprise deployments."),
+    )[-1]["graph"]
+
+    assessment = graph["claim_assessments"][0]
+    assert assessment["relation"] == "partially_supported"
+    assert assessment["temporal_overreach"] is True
+    assert any("source-grounded summary" in cap for cap in graph["score_caps"])
+
+    pipeline = ReliabilityPipeline(entailment_verifier=FixtureEntailmentVerifier())
+    assert pipeline._claim_has_unmatched_temporal_scope(
+        "ExampleOS 9 supported enterprise deployments in 2026.",
+        [{"snippet": "ExampleOS 9 supports enterprise deployments."}],
+    )
 
 
 def test_not_checkable_claim_cannot_be_scored_by_provider(monkeypatch):

@@ -96,8 +96,8 @@ def compute_reliability_score(
         score = min(score, 40)
         applied.append("multiple critical factual claims contradicted: score capped at 40")
     elif high_trust_evidence and critical_contradictions == 1:
-        score = min(score, 60)
-        applied.append("critical factual claim contradicted: score capped at 60")
+        score = min(score, 49)
+        applied.append("critical factual claim contradicted: score capped at 49")
 
     if caps.get("unsupported_high_impact_assumption") and (high_trust_evidence or retrieval_peak <= 0.0):
         score = min(score, 70)
@@ -112,6 +112,13 @@ def compute_reliability_score(
         applied.append("high-impact claim lacks source support: score capped at 65")
 
     if (
+        caps.get("evidence_required")
+        and int(caps.get("partial_support_claims", 0)) > 0
+        and caps.get("source_grounded_summary")
+    ):
+        score = min(score, 55)
+        applied.append("source-grounded summary contains partially supported claims: score capped at 55")
+    elif (
         caps.get("evidence_required")
         and int(caps.get("partial_support_claims", 0)) > 0
         and features.get("sample_overlap_stability", 1.0) <= 0.50
@@ -145,8 +152,8 @@ def compute_reliability_score(
         applied.append("low sample evidence overlap: score capped at 55")
 
     if features.get("sample_conflict_rate", 0.0) >= 0.5:
-        score = min(score, 60)
-        applied.append("candidate answers conflict on numbers or recommendation polarity: score capped at 60")
+        score = min(score, 55)
+        applied.append("candidate answers conflict on numbers or recommendation polarity: score capped at 55")
 
     if (
         features.get("source_quality_score", 0.0) <= 0.30

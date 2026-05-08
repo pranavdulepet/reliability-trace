@@ -19,7 +19,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - URL fetch hardening for private networks, credentials, redirects, content type, response size, and duplicate URL/content reuse.
 - Local benchmark report with calibration buckets, ECE, Brier score, and leave-signal-out ablations from labeled completed runs.
 - External eval harness plus benchmark-tuned linear score weights in `configs/reliability_score_weights.json`; source-required answers use evidence-first weighting and safety caps remain explicit product policy. `docs/REVIEW_READINESS.md` states the current scientific claim boundary and validation gaps for research review.
-- RAG/source-grounding hardening for meta-claim filtering, wider per-claim evidence retrieval, structured negation, unit-aware numeric contradiction checks, and web-result published-date preservation.
+- RAG/source-grounding hardening for meta-claim filtering, wider per-claim evidence retrieval, structured negation, unit-aware numeric contradiction checks, source-grounded summary overreach checks, unresolved source-conflict surfacing, and web-result published-date preservation.
 - Live provider perturbation checks for connected provider runs.
 - Security defaults: provider keys never enter frontend code, saved keys are encrypted, exports exclude plaintext keys, and the main UI requires a connected provider plus ready entailment verifier before answer generation.
 - Direct tests for graph shape, scoring behavior, provider payload safety, key storage, conversation storage, attachment-scoped retrieval, URL fetch hardening, API behavior, and provider-compatible request handling.
@@ -31,7 +31,7 @@ Read this with `plan.md`. The plan is a strong product specification, but the im
 - A downloaded production verifier model in every local environment; run `python scripts/setup_nli_verifier.py` after installing dependencies.
 - Full benchmark calibration of the provider+NLI claim verifier on large held-out runs.
 - Full logprob-based robustness measurements.
-- Large full-dataset empirical calibration for score quality, risk coverage, and ablations beyond the current official-style dev calibration.
+- Large full-dataset empirical calibration for score quality, risk coverage, and ablations beyond the current official-style dev/held-out gates.
 - Hosted product capabilities: auth, workspaces, billing, rate limits, object storage, managed Postgres, audit logs, and admin controls.
 - Binary/PDF document extraction and provider-backed embedding options.
 - Provider-returned reasoning traces beyond observable prompts, outputs, tools, and run events.

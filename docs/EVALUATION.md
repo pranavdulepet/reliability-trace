@@ -66,7 +66,7 @@ Use dev for tuning. Use test/full only after fixes pass dev gates.
 
 The tracked score-weight config is a versioned benchmark-tuned diagnostic. You do not need to refit it on every app launch. Refit when scoring features or caps change, provider/verifier/retrieval/search behavior changes materially, the benchmark mix changes, or enough local user labels exist to justify a new local calibration. Always tune on dev and then report held-out test/full results.
 
-Current RAGTruth strengthening focuses on source-grounded hallucination risk: meta-claim filtering, wider per-claim evidence retrieval, structured negation handling, unit-aware numeric contradiction detection, and preserving web-result published dates for freshness-sensitive retrieval. These changes are evaluated with RAGTruth response-level AUROC/AUPRC and false-safe rate.
+Current RAGTruth strengthening focuses on source-grounded hallucination risk: meta-claim filtering, wider per-claim evidence retrieval, structured negation handling, unit-aware numeric contradiction detection, source-grounded summary overreach checks, and preserving web-result published dates for freshness-sensitive retrieval. These changes are evaluated with RAGTruth response-level AUROC/AUPRC, claim-relation recall on bad answers, bad examples above the medium-score threshold, and false-safe rate.
 
 ## Baselines
 

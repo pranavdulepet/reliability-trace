@@ -19,7 +19,7 @@ from backend.reliability_graph.evals import (
     stable_split_bucket,
     summarize_eval_results,
 )
-from scripts.run_reliability_evals import _append_result, _internal_regressions, _read_results, _sample_examples
+from scripts.run_reliability_evals import _append_result, _default_output_dir, _internal_regressions, _read_results, _sample_examples
 
 
 def test_eval_metric_math_on_tiny_fixture():
@@ -43,6 +43,15 @@ def test_capped_eval_sampling_is_stable_and_seeded():
     assert first == second
     assert first != examples[:5]
     assert first != different_seed
+
+
+def test_default_eval_output_dir_is_collision_resistant():
+    first = _default_output_dir()
+    second = _default_output_dir()
+
+    assert first != second
+    assert first.parent.as_posix() == "data/evals/runs"
+    assert second.parent.as_posix() == "data/evals/runs"
 
 
 def test_ragtruth_label_mapping():
@@ -176,6 +185,7 @@ def test_eval_report_contains_required_sections():
     report = build_markdown_report(summary, results)
 
     assert "## Aggregate Metrics" in report
+    assert "Claim recall" in report
     assert "## Baselines" in report
     assert "## Ablations" in report
     assert "## Failure Cases" in report

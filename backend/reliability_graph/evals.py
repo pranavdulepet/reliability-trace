@@ -620,34 +620,36 @@ def build_markdown_report(summary: Dict[str, Any], results: List[Dict[str, Any]]
         lines.extend(["- %s" % _escape_md(str(note)) for note in notes])
         lines.append("")
     lines.extend(["## Aggregate Metrics", ""])
-    lines.append("| Benchmark | N | AUROC | AUPRC | Spearman | ECE | Brier | False-safe |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Benchmark | N | AUROC | AUPRC | Spearman | Claim recall | ECE | Brier | False-safe |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
     for benchmark, metrics in sorted((summary.get("benchmarks") or {}).items()):
         lines.append(
-            "| %s | %d | %s | %s | %s | %s | %s | %s |"
+            "| %s | %d | %s | %s | %s | %s | %s | %s | %s |"
             % (
                 _escape_md(benchmark),
                 metrics.get("count", 0),
                 _fmt(metrics.get("auroc")),
                 _fmt(metrics.get("auprc")),
                 _fmt(metrics.get("spearman_score_correctness")),
+                _fmt(metrics.get("claim_relation_recall_on_bad")),
                 _fmt(metrics.get("ece")),
                 _fmt(metrics.get("brier")),
                 _fmt(metrics.get("false_safe_rate")),
             )
         )
     lines.extend(["", "## Baselines", ""])
-    lines.append("| Baseline | N | AUROC | AUPRC | F1 | False-safe |")
-    lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
+    lines.append("| Baseline | N | AUROC | AUPRC | F1 | Claim recall | False-safe |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for name, metrics in sorted((summary.get("baselines") or {}).items()):
         lines.append(
-            "| %s | %d | %s | %s | %s | %s |"
+            "| %s | %d | %s | %s | %s | %s | %s |"
             % (
                 _escape_md(name),
                 metrics.get("scored_count", 0),
                 _fmt(metrics.get("auroc")),
                 _fmt(metrics.get("auprc")),
                 _fmt(metrics.get("best_f1")),
+                _fmt(metrics.get("claim_relation_recall_on_bad")),
                 _fmt(metrics.get("false_safe_rate")),
             )
         )

@@ -124,7 +124,7 @@ function UncertaintyTab({ graph }: { graph: ReliabilityGraph }) {
 
 function ClaimsAuditTab({ graph }: { graph: ReliabilityGraph }) {
   const evidenceById = new Map(graph.evidence.map((item) => [item.evidence_id, item]));
-  const rows = claimAuditRows(graph).sort((left, right) => claimAuditRiskRank(left.relation, left.severity, left.source_conflict) - claimAuditRiskRank(right.relation, right.severity, right.source_conflict));
+  const rows = claimAuditRows(graph).sort((left, right) => claimAuditRiskRank(left.relation, left.severity, Boolean(left.source_conflict || left.temporal_overreach)) - claimAuditRiskRank(right.relation, right.severity, Boolean(right.source_conflict || right.temporal_overreach)));
   return (
     <div className="analysis-table-shell">
       <div className="detail-heading">
@@ -148,6 +148,7 @@ function ClaimsAuditTab({ graph }: { graph: ReliabilityGraph }) {
                 <div>
                   <RelationPill relation={row.relation} />
                   {row.source_conflict && <small className="source-conflict-note">source conflict</small>}
+                  {row.temporal_overreach && <small className="source-conflict-note">scope overreach</small>}
                   <small>{formatStatus(row.severity || "low")} risk</small>
                 </div>
                 <div>
@@ -704,8 +705,13 @@ function claimAuditRows(graph: ReliabilityGraph): ClaimAuditRow[] {
       contradiction_score: assessment?.contradiction_score,
       neutral_score: assessment?.neutral_score,
       support_score: assessment?.support_score,
-      risk_flags: [...(claim.risk_flags ?? []), ...(assessment?.source_conflict ? ["source_conflict"] : [])],
+      risk_flags: [
+        ...(claim.risk_flags ?? []),
+        ...(assessment?.source_conflict ? ["source_conflict"] : []),
+        ...(assessment?.temporal_overreach ? ["temporal_overreach"] : []),
+      ],
       source_conflict: Boolean(assessment?.source_conflict),
+      temporal_overreach: Boolean(assessment?.temporal_overreach),
     };
   });
 }
